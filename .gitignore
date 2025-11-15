@@ -1,0 +1,26 @@
+# Local data files
+tasks.json
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+npm-debug.log*
+
+# Azure
+.azure/
+
+# Environment variables (if any)
+.env
+.env.local
+

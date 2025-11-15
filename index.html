@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Task Manager</title>
+    <link rel="stylesheet" href="styles.css">
+    <script>
+        // Load MSAL library with fallback
+        function loadMsalLibrary() {
+            return new Promise((resolve, reject) => {
+                // Try primary CDN
+                const script = document.createElement('script');
+                script.src = 'https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.0.0/lib/msal-browser.min.js';
+                script.async = false;
+                script.defer = false;
+                
+                script.onload = () => {
+                    console.log('MSAL library loaded from jsdelivr');
+                    resolve();
+                };
+                
+                script.onerror = () => {
+                    console.warn('Primary CDN failed, trying fallback...');
+                    // Try fallback CDN
+                    const fallbackScript = document.createElement('script');
+                    fallbackScript.src = 'https://unpkg.com/@azure/msal-browser@3.0.0/lib/msal-browser.min.js';
+                    fallbackScript.async = false;
+                    fallbackScript.defer = false;
+                    
+                    fallbackScript.onload = () => {
+                        console.log('MSAL library loaded from unpkg');
+                        resolve();
+                    };
+                    
+                    fallbackScript.onerror = () => {
+                        console.error('All CDNs failed');
+                        reject(new Error('Failed to load MSAL library from all CDN sources'));
+                    };
+                    
+                    document.head.appendChild(fallbackScript);
+                };
+                
+                document.head.appendChild(script);
+            });
+        }
+        
+        // Load MSAL before page loads
+        loadMsalLibrary().catch(error => {
+            console.error('MSAL loading error:', error);
+            // Show user-friendly message
+            document.addEventListener('DOMContentLoaded', () => {
+                const body = document.body;
+                body.innerHTML = `
+                    <div style="padding: 2rem; text-align: center; font-family: Arial, sans-serif;">
+                        <h1 style="color: #dc3545;">MSAL Library Failed to Load</h1>
+                        <p>Unable to load the Microsoft Authentication Library. This could be due to:</p>
+                        <ul style="text-align: left; display: inline-block;">
+                            <li>Internet connection issues</li>
+                            <li>Firewall or network restrictions blocking CDN access</li>
+                            <li>Corporate proxy settings</li>
+                        </ul>
+                        <p><strong>Solutions:</strong></p>
+                        <ol style="text-align: left; display: inline-block;">
+                            <li>Check your internet connection</li>
+                            <li>Try refreshing the page</li>
+                            <li>Check if your firewall/proxy allows access to cdn.jsdelivr.net and unpkg.com</li>
+                            <li>Try using a different network</li>
+                        </ol>
+                        <button onclick="location.reload()" style="padding: 0.5rem 1rem; margin-top: 1rem; cursor: pointer;">Retry</button>
+                    </div>
+                `;
+            });
+        });
+    </script>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <h1>Task Manager</h1>
+            <div class="header-actions">
+                <button id="loginBtn" class="btn btn-primary">Sign In</button>
+                <span id="userInfo" class="user-info" style="display: none;"></span>
+                <button id="logoutBtn" class="btn btn-secondary" style="display: none;">Sign Out</button>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Top Bar -->
+            <div class="top-bar">
+                <div class="top-bar-left">
+                    <button id="addTaskBtn" class="btn btn-primary">
+                        <span class="icon">+</span> Add Task
+                    </button>
+                    <div class="search-container">
+                        <input type="text" id="searchInput" placeholder="Search tasks..." class="search-input">
+                        <button id="searchClear" class="search-clear" style="display: none;" title="Clear search">✕</button>
+                    </div>
+                </div>
+                <div class="top-bar-right">
+                    <button id="pomodoroBtn" class="btn btn-pomodoro">🍅 Pomodoro</button>
+                    <button id="completedBtn" class="btn btn-completed">
+                        ✅ Completed
+                    </button>
+                </div>
+            </div>
+
+            <!-- Pomodoro Timer Modal -->
+            <div class="pomodoro-container" id="pomodoroContainer" style="display: none;">
+                <div class="pomodoro-timer" id="pomodoroTimer">
+                    <div class="pomodoro-display">
+                        <span id="pomodoroTime">25:00</span>
+                        <div class="pomodoro-controls">
+                            <button id="pomodoroStart" class="pomodoro-btn">▶️</button>
+                            <button id="pomodoroPause" class="pomodoro-btn" style="display: none;">⏸️</button>
+                            <button id="pomodoroReset" class="pomodoro-btn">🔄</button>
+                            <button id="pomodoroClose" class="pomodoro-btn">✕</button>
+                        </div>
+                    </div>
+                    <div class="pomodoro-task-info" id="pomodoroTaskInfo"></div>
+                </div>
+            </div>
+
+            <!-- Flagged Tasks Section -->
+            <div id="flaggedSection" class="flagged-section">
+                <div class="flagged-header">
+                    <h2>🚩 Flagged Tasks</h2>
+                    <span class="flagged-count" id="flaggedCount">0</span>
+                </div>
+                <div class="flagged-tasks" id="flaggedTasks"></div>
+            </div>
+
+            <!-- Bucket Columns -->
+            <div class="buckets-container">
+                <!-- Top Row -->
+                <div class="bucket" data-bucket="this-week">
+                    <div class="bucket-header" id="this-week-header">
+                        <h2>📅 This Week</h2>
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <span class="bucket-count" id="count-this-week">0</span>
+                            <button class="bucket-toggle" id="this-week-toggle" title="Expand/Collapse">▲</button>
+                        </div>
+                    </div>
+                    <div class="bucket-tasks" id="bucket-this-week"></div>
+                </div>
+
+                <div class="bucket" data-bucket="next-week">
+                    <div class="bucket-header" id="next-week-header">
+                        <h2>📆 Next Week</h2>
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <span class="bucket-count" id="count-next-week">0</span>
+                            <button class="bucket-toggle" id="next-week-toggle" title="Expand/Collapse">▲</button>
+                        </div>
+                    </div>
+                    <div class="bucket-tasks" id="bucket-next-week"></div>
+                </div>
+
+                <div class="bucket" data-bucket="this-month">
+                    <div class="bucket-header" id="this-month-header">
+                        <h2>🗓️ This Month</h2>
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <span class="bucket-count" id="count-this-month">0</span>
+                            <button class="bucket-toggle" id="this-month-toggle" title="Expand/Collapse">▲</button>
+                        </div>
+                    </div>
+                    <div class="bucket-tasks" id="bucket-this-month"></div>
+                </div>
+
+                <!-- Bottom Row -->
+                <div class="bucket bucket-collapsed" data-bucket="next-month">
+                    <div class="bucket-header" id="next-month-header">
+                        <h2>📋 Next Month</h2>
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <span class="bucket-count" id="count-next-month">0</span>
+                            <button class="bucket-toggle" id="next-month-toggle" title="Expand/Collapse">▼</button>
+                        </div>
+                    </div>
+                    <div class="bucket-tasks" id="bucket-next-month" style="display: none;"></div>
+                </div>
+
+                <div class="bucket bucket-collapsed" data-bucket="recurring">
+                    <div class="bucket-header" id="recurring-header">
+                        <h2>🔄 Recurring</h2>
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <span class="bucket-count" id="count-recurring">0</span>
+                            <button class="bucket-toggle" id="recurring-toggle" title="Expand/Collapse">▼</button>
+                        </div>
+                    </div>
+                    <div class="bucket-tasks" id="bucket-recurring" style="display: none;"></div>
+                </div>
+
+                <div class="bucket bucket-collapsed" data-bucket="someday">
+                    <div class="bucket-header" id="someday-header">
+                        <h2>⭐ Someday</h2>
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <span class="bucket-count" id="count-someday">0</span>
+                            <button class="bucket-toggle" id="someday-toggle" title="Expand/Collapse">▼</button>
+                        </div>
+                    </div>
+                    <div class="bucket-tasks" id="bucket-someday" style="display: none;"></div>
+                </div>
+            </div>
+
+            <!-- Completed Tasks View (hidden by default) -->
+            <div id="completedView" class="completed-view" style="display: none;">
+                <div class="completed-view-header">
+                    <h2>✅ Completed Tasks</h2>
+                    <button id="backToMainBtn" class="btn btn-secondary">← Back</button>
+                </div>
+                <div class="completed-tasks-grid" id="completedTasksGrid"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Task Modal -->
+    <div id="taskModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modalTitle">Add Task</h2>
+                <button class="modal-close" id="closeModal">&times;</button>
+            </div>
+            <form id="taskForm">
+                <input type="hidden" id="taskId">
+                
+                <div class="form-group">
+                    <label for="taskTitle">Title *</label>
+                    <input type="text" id="taskTitle" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="taskDueDate">Due Date</label>
+                    <input type="text" id="taskDueDate" placeholder="e.g., tomorrow, next week, in 3 days, or 2024-12-25">
+                    <small class="form-hint">Enter a date or natural language like "tomorrow", "next week", "in 3 days"</small>
+                </div>
+
+                <div class="form-group">
+                    <label for="taskDescription">Description</label>
+                    <textarea id="taskDescription" rows="2"></textarea>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="taskBucket">When *</label>
+                        <select id="taskBucket" required>
+                            <option value="this-week" selected>This Week</option>
+                            <option value="next-week">Next Week</option>
+                            <option value="this-month">This Month</option>
+                            <option value="next-month">Next Month</option>
+                            <option value="recurring">Recurring</option>
+                            <option value="someday">Someday</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="taskTags">Tags (comma-separated)</label>
+                        <input type="text" id="taskTags" placeholder="work, urgent, personal">
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="taskFlagged">
+                            Flag Task
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="taskRecurring">
+                            Recurring Task
+                        </label>
+                    </div>
+                </div>
+
+                <div id="recurringOptions" class="recurring-options" style="display: none;">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="recurringType">Repeat</label>
+                            <select id="recurringType">
+                                <option value="daily">Daily</option>
+                                <option value="weekly">Weekly</option>
+                                <option value="monthly">Monthly</option>
+                                <option value="yearly">Yearly</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="recurringInterval">Every</label>
+                            <input type="number" id="recurringInterval" min="1" value="1">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-danger" id="deleteBtn" style="display: none;">Delete</button>
+                    <button type="submit" class="btn btn-primary">Save Task</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="loading-overlay" style="display: none;">
+        <div class="spinner"></div>
+        <p>Syncing with OneDrive...</p>
+    </div>
+
+
+    <script src="auth.js"></script>
+    <script src="task-manager.js"></script>
+    <script src="onedrive.js"></script>
+    <script src="ui.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
+
