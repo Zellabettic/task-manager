@@ -970,6 +970,61 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+// Custom confirmation dialog
+function showConfirmDialog(title, message) {
+    return new Promise((resolve) => {
+        const dialog = document.getElementById('confirmDialog');
+        const titleEl = document.getElementById('confirmDialogTitle');
+        const messageEl = document.getElementById('confirmDialogMessage');
+        const confirmBtn = document.getElementById('confirmDialogConfirm');
+        const cancelBtn = document.getElementById('confirmDialogCancel');
+        
+        // Set content
+        titleEl.textContent = title;
+        messageEl.textContent = message;
+        
+        // Show dialog
+        dialog.classList.add('show');
+        
+        // Remove existing listeners to prevent duplicates
+        const newConfirmBtn = confirmBtn.cloneNode(true);
+        const newCancelBtn = cancelBtn.cloneNode(true);
+        confirmBtn.parentNode.replaceChild(newConfirmBtn, confirmBtn);
+        cancelBtn.parentNode.replaceChild(newCancelBtn, cancelBtn);
+        
+        // Add new listeners
+        newConfirmBtn.addEventListener('click', () => {
+            dialog.classList.remove('show');
+            resolve(true);
+        });
+        
+        newCancelBtn.addEventListener('click', () => {
+            dialog.classList.remove('show');
+            resolve(false);
+        });
+        
+        // Close on backdrop click
+        const backdropClick = (e) => {
+            if (e.target === dialog) {
+                dialog.classList.remove('show');
+                dialog.removeEventListener('click', backdropClick);
+                resolve(false);
+            }
+        };
+        dialog.addEventListener('click', backdropClick);
+        
+        // Close on Escape key
+        const escapeKey = (e) => {
+            if (e.key === 'Escape') {
+                dialog.classList.remove('show');
+                document.removeEventListener('keydown', escapeKey);
+                resolve(false);
+            }
+        };
+        document.addEventListener('keydown', escapeKey);
+    });
+}
+
 // Initialize UI event listeners
 function initializeUI() {
     // Add task button
@@ -1031,11 +1086,17 @@ function initializeUI() {
     }
 
     // Delete button
-    document.getElementById('deleteBtn').addEventListener('click', () => {
-        if (currentEditingTaskId && confirm('Are you sure you want to delete this task?')) {
-            deleteTask(currentEditingTaskId);
-            closeTaskModal();
-            saveAndRender();
+    document.getElementById('deleteBtn').addEventListener('click', async () => {
+        if (currentEditingTaskId) {
+            const confirmed = await showConfirmDialog(
+                'Delete Task',
+                'Are you sure you want to delete this task? This action cannot be undone.'
+            );
+            if (confirmed) {
+                deleteTask(currentEditingTaskId);
+                closeTaskModal();
+                saveAndRender();
+            }
         }
     });
 
@@ -1601,9 +1662,13 @@ function renderCompletedView() {
                     deleteBtn.setAttribute('data-id', task.id);
                     deleteBtn.title = 'Delete';
                     deleteBtn.textContent = '🗑️';
-                    deleteBtn.addEventListener('click', (e) => {
+                    deleteBtn.addEventListener('click', async (e) => {
                         e.stopPropagation();
-                        if (confirm('Are you sure you want to delete this task?')) {
+                        const confirmed = await showConfirmDialog(
+                            'Delete Task',
+                            'Are you sure you want to delete this task? This action cannot be undone.'
+                        );
+                        if (confirmed) {
                             deleteTask(task.id);
                             saveAndRender();
                         }
