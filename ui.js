@@ -1,6 +1,7 @@
 // UI rendering and interactions
 let currentEditingTaskId = null;
 let draggedTaskId = null;
+let dragStartPosition = null; // Store initial drag position
 
 // Render all buckets
 function renderBuckets() {
@@ -34,23 +35,40 @@ function renderBuckets() {
         const bottomRowBuckets = ['next-month', 'recurring', 'someday'];
         const isBottomRow = bottomRowBuckets.includes(bucket);
         
-        // If searching and this bucket has matching tasks, expand it
-        if (searchTerm && bucketTasks.length > 0 && bucketContainer) {
-            bucketElement.style.display = 'flex';
-            bucketContainer.classList.remove('bucket-collapsed');
-            // Update toggle button if it exists
-            const toggle = document.getElementById(`${bucket}-toggle`);
-            if (toggle) {
-                toggle.textContent = '▲';
+        // Handle search mode: hide buckets without matches, show and expand buckets with matches
+        if (searchTerm) {
+            if (bucketTasks.length > 0 && bucketContainer) {
+                // Show and expand bucket with matches
+                bucketElement.style.display = 'flex';
+                bucketContainer.style.display = 'flex';
+                bucketContainer.classList.remove('bucket-collapsed');
+                // Update toggle button if it exists
+                const toggle = document.getElementById(`${bucket}-toggle`);
+                if (toggle) {
+                    toggle.textContent = '▲';
+                }
+            } else if (bucketContainer) {
+                // Hide bucket without matches
+                bucketContainer.style.display = 'none';
             }
-        } else if (!searchTerm && isBottomRow && bucketContainer) {
-            // When search is cleared, collapse bottom row buckets
-            bucketElement.style.display = 'none';
-            bucketContainer.classList.add('bucket-collapsed');
-            // Update toggle button if it exists
-            const toggle = document.getElementById(`${bucket}-toggle`);
-            if (toggle) {
-                toggle.textContent = '▼';
+        } else {
+            // Normal mode: restore default visibility
+            if (bucketContainer) {
+                bucketContainer.style.display = 'flex';
+            }
+            if (isBottomRow && bucketContainer) {
+                // Collapse bottom row buckets when search is cleared
+                bucketElement.style.display = 'none';
+                bucketContainer.classList.add('bucket-collapsed');
+                // Update toggle button if it exists
+                const toggle = document.getElementById(`${bucket}-toggle`);
+                if (toggle) {
+                    toggle.textContent = '▼';
+                }
+            } else if (bucketContainer) {
+                // Expand top row buckets
+                bucketElement.style.display = 'flex';
+                bucketContainer.classList.remove('bucket-collapsed');
             }
         }
         
@@ -104,22 +122,7 @@ function renderBuckets() {
         
         // Render tasks
         if (bucketTasks.length === 0) {
-            bucketElement.innerHTML = '<div class="empty-bucket">Click to add task</div>';
-            // Make empty bucket clickable
-            const emptyBucket = bucketElement.querySelector('.empty-bucket');
-            if (emptyBucket) {
-                emptyBucket.style.cursor = 'pointer';
-                emptyBucket.addEventListener('click', (e) => {
-                    if (hasDragged) return;
-                    e.stopPropagation();
-                    // Pre-select this bucket before opening modal
-                    const bucketSelect = document.getElementById('taskBucket');
-                    if (bucketSelect) {
-                        bucketSelect.value = bucket;
-                    }
-                    openTaskModal();
-                });
-            }
+            bucketElement.innerHTML = '';
         } else {
             bucketElement.innerHTML = bucketTasks.map(task => createTaskCard(task)).join('');
             
@@ -127,6 +130,9 @@ function renderBuckets() {
             bucketTasks.forEach(task => {
                 attachTaskEventListeners(task.id);
             });
+            
+            // Optimize card sizing to fit all tasks without scrolling
+            optimizeBucketCardSizing(bucketElement, bucketTasks.length);
         }
         
         // Make bucket header clickable to add task (but not the toggle button or count)
@@ -151,7 +157,142 @@ function renderBuckets() {
             }
         }
     });
+    
+    // If searching, scroll to first matching task
+    if (searchTerm) {
+        setTimeout(() => {
+            // Find first visible task card (check flagged section first, then buckets)
+            const flaggedSection = document.getElementById('flaggedSection');
+            let firstTaskCard = null;
+            
+            if (flaggedSection && flaggedSection.style.display !== 'none') {
+                firstTaskCard = flaggedSection.querySelector('.task-card');
+            }
+            
+            if (!firstTaskCard) {
+                // Find first visible task card in buckets
+                firstTaskCard = document.querySelector('[data-bucket] .task-card');
+            }
+            
+            if (firstTaskCard) {
+                firstTaskCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        }, 100);
+    }
+    
+    // Optimize card sizing for all buckets after a short delay to ensure layout is complete
+    setTimeout(() => {
+        optimizeAllBucketsCardSizing();
+        // Also optimize flagged tasks
+        const flaggedTasksContainer = document.getElementById('flaggedTasks');
+        if (flaggedTasksContainer) {
+            const taskCards = flaggedTasksContainer.querySelectorAll('.task-card');
+            if (taskCards.length > 0) {
+                optimizeBucketCardSizing(flaggedTasksContainer, taskCards.length);
+            }
+        }
+    }, 50);
 }
+
+// Optimize card sizing for a single bucket or flagged tasks section
+function optimizeBucketCardSizing(bucketTasksElement, taskCount) {
+    if (!bucketTasksElement || taskCount === 0) return;
+    
+    // Get the container (bucket or flagged-section)
+    const container = bucketTasksElement.closest('.bucket') || bucketTasksElement.closest('.flagged-section');
+    if (!container) return;
+    
+    // Get available width (container width minus padding)
+    const containerRect = container.getBoundingClientRect();
+    if (containerRect.width === 0) return; // Not visible yet
+    
+    const padding = 32; // 1rem on each side = 16px * 2
+    const gap = 12; // 0.75rem gap between cards
+    const availableWidth = containerRect.width - padding;
+    
+    // Preferred and minimum card widths
+    const preferredCardWidth = 240; // Preferred size for cards
+    const minCardWidth = 180; // Minimum size to maintain readability
+    
+    // Calculate how many cards fit per row at preferred width
+    let cardsPerRowAtPreferred = Math.floor((availableWidth + gap) / (preferredCardWidth + gap));
+    cardsPerRowAtPreferred = Math.max(1, cardsPerRowAtPreferred); // At least 1
+    
+    let optimalColumns;
+    let cardWidth;
+    
+    // If we can't fit even one card at preferred width, use minimum width
+    if (availableWidth < preferredCardWidth) {
+        const cardsPerRowAtMin = Math.floor((availableWidth + gap) / (minCardWidth + gap));
+        optimalColumns = Math.max(1, cardsPerRowAtMin);
+        cardWidth = Math.max(
+            minCardWidth,
+            (availableWidth - (optimalColumns - 1) * gap) / optimalColumns
+        );
+    } else {
+        // CRITICAL: Always use the number of columns that fit per row, NOT the task count
+        // This ensures cards wrap to multiple rows when there are more cards than columns
+        optimalColumns = cardsPerRowAtPreferred;
+        
+        // Calculate card width to fill ALL available space (no wasted space)
+        // Distribute remaining space evenly among cards
+        const totalGapSpace = (optimalColumns - 1) * gap;
+        const totalCardSpace = availableWidth - totalGapSpace;
+        cardWidth = totalCardSpace / optimalColumns;
+        
+        // Only enforce minimum width - allow cards to grow wider to fill space
+        cardWidth = Math.max(minCardWidth, cardWidth);
+        
+        // Only if ALL cards fit in one row AND we want to fill space, use taskCount
+        // But limit this to avoid preventing wrapping
+        if (cardsPerRowAtPreferred > taskCount && taskCount > 0) {
+            // More columns available than tasks - can use taskCount to fill space
+            const calculatedWidth = (availableWidth - (taskCount - 1) * gap) / taskCount;
+            if (calculatedWidth >= minCardWidth) {
+                cardWidth = calculatedWidth;
+                optimalColumns = taskCount;
+            }
+        }
+    }
+    
+    // Apply the grid template columns
+    // Use a fixed repeat to create exactly the number of columns that fit per row
+    // CSS Grid will automatically wrap cards to new rows when there are more cards than columns
+    // IMPORTANT: We use the calculated number of columns, NOT the task count
+    bucketTasksElement.style.gridTemplateColumns = `repeat(${optimalColumns}, ${cardWidth}px)`;
+    
+    // Ensure grid allows wrapping (should be default, but make it explicit)
+    bucketTasksElement.style.gridAutoFlow = 'row';
+    // Use auto instead of min-content to prevent all cards in a row from expanding
+    bucketTasksElement.style.gridAutoRows = 'auto';
+    
+    // Force grid to respect the column count (override any CSS that might interfere)
+    bucketTasksElement.style.display = 'grid';
+}
+
+// Optimize card sizing for all visible buckets
+function optimizeAllBucketsCardSizing() {
+    const buckets = ['this-week', 'next-week', 'this-month', 'next-month', 'recurring', 'someday'];
+    
+    buckets.forEach(bucket => {
+        const bucketElement = document.getElementById(`bucket-${bucket}`);
+        if (!bucketElement) return;
+        
+        // Only optimize if bucket is visible
+        const bucketContainer = document.querySelector(`[data-bucket="${bucket}"]`);
+        if (!bucketContainer) return;
+        
+        const isVisible = bucketElement.style.display !== 'none' && 
+                         bucketContainer.style.display !== 'none';
+        if (!isVisible) return;
+        
+        const taskCards = bucketElement.querySelectorAll('.task-card');
+        if (taskCards.length > 0) {
+            optimizeBucketCardSizing(bucketElement, taskCards.length);
+        }
+    });
+}
+
 
 // Render flagged tasks in horizontal section
 function renderFlaggedTasks(tasksToRender) {
@@ -185,19 +326,28 @@ function renderFlaggedTasks(tasksToRender) {
     const totalFlaggedCount = getAllTasks().filter(t => t.flagged === true && !t.completed).length;
     flaggedCountElement.textContent = totalFlaggedCount;
     
-    // Always show the flagged section (even when empty) so users can click to add
-    flaggedSection.style.display = 'block';
+    // Check if we're in search mode
+    const searchTerm = document.getElementById('searchInput')?.value.toLowerCase() || '';
     
-    if (flaggedTasks.length === 0) {
-        // Show empty state message
-        flaggedTasksContainer.innerHTML = '<div class="empty-flagged" style="text-align: center; padding: 2rem; color: var(--text-light); font-style: italic; cursor: pointer;">Click to add flagged task</div>';
+    // Hide flagged section if there are no flagged tasks at all (not just filtered)
+    // Only show if there are actual flagged tasks (excluding completed)
+    if (totalFlaggedCount === 0) {
+        flaggedSection.style.display = 'none';
+    } else if (flaggedTasks.length === 0 && searchTerm) {
+        // If searching and no matches, hide it
+        flaggedSection.style.display = 'none';
     } else {
+        // Show the section and render tasks
+        flaggedSection.style.display = 'block';
         flaggedTasksContainer.innerHTML = flaggedTasks.map(task => createTaskCard(task)).join('');
         
         // Attach event listeners to flagged tasks
         flaggedTasks.forEach(task => {
             attachTaskEventListeners(task.id);
         });
+        
+        // Optimize card sizing using the same logic as buckets
+        optimizeBucketCardSizing(flaggedTasksContainer, flaggedTasks.length);
     }
 }
 
@@ -240,7 +390,7 @@ function createTaskCard(task) {
              ondragstart="handleDragStart(event, '${task.id}')"
              ondragend="handleDragEnd(event)">
             <div class="task-header">
-                <div class="task-title">${escapeHtml(task.title)}</div>
+                <div class="task-title">${escapeHtml(task.title).replace(/\n/g, '<br>')}</div>
                 <div class="task-actions">
                     <button class="flag-task ${task.flagged ? 'flagged' : ''}" data-id="${task.id}" title="${task.flagged ? 'Unflag' : 'Flag'}">🚩</button>
                     <button class="pomodoro-start-task" data-id="${task.id}" title="Start Pomodoro">🍅</button>
@@ -331,12 +481,20 @@ function handleDragStart(event, taskId) {
     event.dataTransfer.setData('text/html', taskId);
     event.currentTarget.classList.add('dragging');
     hasDragged = false; // Reset flag at start of drag
+    
+    // Store initial drag position
+    const rect = draggedElement.getBoundingClientRect();
+    dragStartPosition = {
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2
+    };
 }
 
 let draggedElement = null;
 
 function handleDragEnd(event) {
     event.currentTarget.classList.remove('dragging');
+    dragStartPosition = null; // Reset drag position
     // Remove drag-over class from all buckets, flagged section, and tasks
     document.querySelectorAll('.bucket-tasks').forEach(el => {
         el.classList.remove('drag-over');
@@ -428,11 +586,13 @@ function handleDrop(event) {
     const newBucket = bucketElement.getAttribute('data-bucket');
     if (!newBucket) return;
     
-    // Remove drag-over classes
+    // Remove drag-over classes and indicators
     bucketTasksElement.classList.remove('drag-over');
     document.querySelectorAll('.task-card').forEach(card => {
-        card.classList.remove('drag-over-task');
+        card.classList.remove('drag-over-task', 'drag-over-before', 'drag-over-after', 'drag-over-left', 'drag-over-right');
     });
+    const indicator = bucketTasksElement.querySelector('.drop-indicator');
+    if (indicator) indicator.remove();
     
     // If dropping into completed bucket, mark as completed
     if (newBucket === 'completed' && !task.completed) {
@@ -457,11 +617,66 @@ function handleDrop(event) {
         }
     }
     
+    // Find the drop position in the target bucket
+    const mouseX = event.clientX;
+    const mouseY = event.clientY;
+    let insertBeforeTaskId = null;
+    let closestCard = null;
+    let closestDistance = Infinity;
+    
+    // Get all task cards in the target bucket (excluding the dragged one)
+    const taskCards = Array.from(bucketTasksElement.querySelectorAll('.task-card'))
+        .filter(card => card.getAttribute('data-task-id') !== draggedTaskId);
+    
+    // Find the closest task card to the drop position
+    for (let i = 0; i < taskCards.length; i++) {
+        const card = taskCards[i];
+        const cardRect = card.getBoundingClientRect();
+        const cardCenterX = cardRect.left + (cardRect.width / 2);
+        const cardCenterY = cardRect.top + (cardRect.height / 2);
+        
+        // Calculate distance from mouse to card center
+        const distanceX = mouseX - cardCenterX;
+        const distanceY = mouseY - cardCenterY;
+        const distance = Math.sqrt(distanceX * distanceX + distanceY * distanceY);
+        
+        if (distance < closestDistance) {
+            closestDistance = distance;
+            closestCard = {
+                id: card.getAttribute('data-task-id'),
+                centerX: cardCenterX,
+                centerY: cardCenterY,
+                rect: cardRect
+            };
+        }
+    }
+    
+    // Determine insert position based on closest card
+    if (closestCard) {
+        // If mouse is above the card's vertical center, insert before
+        // If mouse is to the left of the card's horizontal center (and roughly same row), insert before
+        if (mouseY < closestCard.centerY || 
+            (Math.abs(mouseY - closestCard.centerY) < closestCard.rect.height / 2 && mouseX < closestCard.centerX)) {
+            insertBeforeTaskId = closestCard.id;
+        } else {
+            // Insert after the closest card - find the next card in the grid
+            const allCards = Array.from(bucketTasksElement.querySelectorAll('.task-card'));
+            const closestIndex = allCards.findIndex(card => card.getAttribute('data-task-id') === closestCard.id);
+            if (closestIndex >= 0 && closestIndex < allCards.length - 1) {
+                insertBeforeTaskId = allCards[closestIndex + 1].getAttribute('data-task-id');
+            }
+        }
+    }
+    
+    // If no insert position found, insertBeforeTaskId stays null (adds to end)
+    
     // Check if moving to different bucket or reordering within same bucket
     if (task.bucket !== newBucket) {
-        // Moving to different bucket
+        // Moving to different bucket - change bucket first, then reorder
         try {
             moveTaskToBucket(draggedTaskId, newBucket);
+            // Now reorder within the new bucket at the drop position
+            reorderTaskInBucket(draggedTaskId, insertBeforeTaskId, newBucket);
             saveAndRender();
         } catch (error) {
             console.error('Error moving task:', error);
@@ -469,28 +684,6 @@ function handleDrop(event) {
         }
     } else {
         // Reordering within same bucket
-        const mouseY = event.clientY;
-        let insertBeforeTaskId = null;
-        
-        // Get all task cards in the bucket (excluding the dragged one)
-        const taskCards = Array.from(bucketTasksElement.querySelectorAll('.task-card'))
-            .filter(card => card.getAttribute('data-task-id') !== draggedTaskId);
-        
-        // Find which task we're dropping above based on Y position
-        for (let i = 0; i < taskCards.length; i++) {
-            const card = taskCards[i];
-            const cardRect = card.getBoundingClientRect();
-            const cardCenterY = cardRect.top + (cardRect.height / 2);
-            
-            if (mouseY < cardCenterY) {
-                // Dropped above this card's center - insert before it
-                insertBeforeTaskId = card.getAttribute('data-task-id');
-                break;
-            }
-        }
-        
-        // If no insert position found, insertBeforeTaskId stays null (adds to end)
-        
         try {
             reorderTaskInBucket(draggedTaskId, insertBeforeTaskId, newBucket);
             saveAndRender();
@@ -520,8 +713,8 @@ function openTaskModal(taskId = null) {
         document.getElementById('taskId').value = task.id;
         document.getElementById('taskTitle').value = task.title;
         document.getElementById('taskDescription').value = task.description || '';
-        // Show the actual date when editing (not natural language)
-        document.getElementById('taskDueDate').value = task.dueDate || '';
+        // Show the date in mm/dd/yy format when editing
+        document.getElementById('taskDueDate').value = task.dueDate ? formatDateForEdit(task.dueDate) : '';
         document.getElementById('taskBucket').value = task.bucket || 'this-week';
         document.getElementById('taskTags').value = task.tags.join(', ');
         document.getElementById('taskFlagged').checked = task.flagged || false;
@@ -615,11 +808,39 @@ function debouncedSync() {
 // Format date (date should already be a Date object, not a string)
 function formatDate(date) {
     if (!date || !(date instanceof Date) || isNaN(date.getTime())) return '';
-    // Use local date methods to avoid timezone issues
+    
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const dateYear = date.getFullYear();
+    const todayYear = today.getFullYear();
+    
+    // Format as abbreviated day of week, abbreviated month, and day
+    const dayOfWeek = date.toLocaleDateString('en-US', { weekday: 'short' });
     const month = date.toLocaleDateString('en-US', { month: 'short' });
     const day = date.getDate();
-    const year = date.getFullYear();
-    return `${month} ${day}, ${year}`;
+    
+    // Include year only if it's in the following year (next year)
+    if (dateYear > todayYear) {
+        return `${dayOfWeek}, ${month} ${day}, ${dateYear}`;
+    } else {
+        return `${dayOfWeek}, ${month} ${day}`;
+    }
+}
+
+// Convert YYYY-MM-DD date string to mm/dd/yy format for editing
+function formatDateForEdit(dateString) {
+    if (!dateString) return '';
+    const dateParts = dateString.split('-');
+    if (dateParts.length === 3) {
+        const year = parseInt(dateParts[0]);
+        const month = parseInt(dateParts[1]);
+        const day = parseInt(dateParts[2]);
+        const monthStr = String(month).padStart(2, '0');
+        const dayStr = String(day).padStart(2, '0');
+        const yearStr = String(year).slice(-2);
+        return `${monthStr}/${dayStr}/${yearStr}`;
+    }
+    return dateString;
 }
 
 // Edit just the due date of a task
@@ -631,9 +852,9 @@ function editTaskDueDate(taskId, dueDateElement) {
     const input = document.createElement('input');
     input.type = 'text';
     input.className = 'due-date-input';
-    // Show the raw date string (YYYY-MM-DD) - user can type natural language or MM/DD
-    input.value = task.dueDate || '';
-    input.placeholder = 'e.g., 11/13, tomorrow, next week, in 3 days, or 2024-12-25';
+    // Convert stored date (YYYY-MM-DD) to mm/dd/yy format for editing
+    input.value = task.dueDate ? formatDateForEdit(task.dueDate) : '';
+    input.placeholder = 'e.g., 01/15/24, jan 15, january 15 2024, tomorrow, or next week';
     input.style.cssText = 'padding: 0.25rem 0.5rem; border: 1px solid var(--primary-color); border-radius: 4px; font-size: 0.875rem; width: 200px;';
     
     // Replace the due date element with the input
@@ -646,7 +867,47 @@ function editTaskDueDate(taskId, dueDateElement) {
     // Handle saving
     const saveDueDate = () => {
         const inputValue = input.value.trim();
+        
+        // If input is empty, remove the date
+        if (!inputValue) {
+            const task = getTaskById(taskId);
+            if (task) {
+                task.dueDate = null;
+                task.updatedAt = new Date().toISOString();
+                saveAndRender();
+            }
+            return;
+        }
+        
         const parsedDate = parseNaturalDate(inputValue);
+        
+        // If date couldn't be parsed, show error
+        if (!parsedDate) {
+            // Show error message
+            input.style.borderColor = 'var(--danger-color)';
+            input.style.backgroundColor = 'rgba(239, 68, 68, 0.1)';
+            
+            // Create error message element
+            let errorMsg = parent.querySelector('.date-error-message');
+            if (!errorMsg) {
+                errorMsg = document.createElement('div');
+                errorMsg.className = 'date-error-message';
+                errorMsg.style.cssText = 'color: var(--danger-color); font-size: 0.75rem; margin-top: 0.25rem; padding: 0.25rem 0.5rem; background: rgba(239, 68, 68, 0.1); border-radius: 4px;';
+                parent.insertBefore(errorMsg, input.nextSibling);
+            }
+            errorMsg.textContent = `Unable to parse date "${inputValue}". Try formats like: 01/15/24, jan 15, january 15 2024, tomorrow, or next week`;
+            
+            // Remove error on next input
+            input.addEventListener('input', () => {
+                input.style.borderColor = '';
+                input.style.backgroundColor = '';
+                if (errorMsg) {
+                    errorMsg.remove();
+                }
+            }, { once: true });
+            
+            return; // Don't save if date is invalid
+        }
         
         // Update the task
         const task = getTaskById(taskId);
@@ -681,6 +942,12 @@ function editTaskDueDate(taskId, dueDateElement) {
                 const inputValue = input.value.trim();
                 // Only save if there's a value, otherwise remove the date
                 if (inputValue) {
+                    // Check if date can be parsed before saving
+                    const parsedDate = parseNaturalDate(inputValue);
+                    if (!parsedDate) {
+                        // Don't save on blur if date is invalid - let user fix it
+                        return;
+                    }
                     saveDueDate();
                 } else {
                     // Remove the due date
@@ -750,6 +1017,18 @@ function initializeUI() {
         e.preventDefault();
         handleTaskSubmit();
     });
+    
+    // Title textarea: Enter to submit, Shift+Enter for new line
+    const taskTitle = document.getElementById('taskTitle');
+    if (taskTitle) {
+        taskTitle.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleTaskSubmit();
+            }
+            // Shift+Enter will allow default behavior (new line)
+        });
+    }
 
     // Delete button
     document.getElementById('deleteBtn').addEventListener('click', () => {
@@ -890,28 +1169,143 @@ function initializeUI() {
             
             if (!draggedTaskId) return;
             
-            // Find which task we're hovering over based on Y position
+            // Find which task we're hovering over based on both X and Y position (for grid layout)
+            const mouseX = e.clientX;
             const mouseY = e.clientY;
-            const taskCards = Array.from(el.querySelectorAll('.task-card'));
+            const taskCards = Array.from(el.querySelectorAll('.task-card'))
+                .filter(card => card.getAttribute('data-task-id') !== draggedTaskId);
             
-            // Remove all drag-over-task classes first
+            // Remove all drag-over-task classes and drop indicators first
             document.querySelectorAll('.task-card').forEach(card => {
-                card.classList.remove('drag-over-task');
+                card.classList.remove('drag-over-task', 'drag-over-before', 'drag-over-after', 'drag-over-left', 'drag-over-right');
             });
             
-            // Find the task card we're hovering over
+            // Remove any existing drop indicator
+            const existingIndicator = el.querySelector('.drop-indicator');
+            if (existingIndicator) {
+                existingIndicator.remove();
+            }
+            
+            // Find the closest task card
+            let closestCard = null;
+            let closestDistance = Infinity;
+            let insertPosition = 'before'; // 'before', 'after', 'left', 'right'
+            
             for (let i = 0; i < taskCards.length; i++) {
                 const card = taskCards[i];
-                if (card === draggedElement) continue;
-                
                 const cardRect = card.getBoundingClientRect();
-                const cardCenterY = cardRect.top + cardRect.height / 2;
+                const cardCenterX = cardRect.left + (cardRect.width / 2);
+                const cardCenterY = cardRect.top + (cardRect.height / 2);
                 
-                if (mouseY < cardCenterY) {
-                    // Hovering above this card - show insert indicator
-                    card.classList.add('drag-over-task');
-                    break;
+                // Calculate distance
+                const distanceX = mouseX - cardCenterX;
+                const distanceY = mouseY - cardCenterY;
+                const distance = Math.sqrt(distanceX * distanceX + distanceY * distanceY);
+                
+                if (distance < closestDistance) {
+                    closestDistance = distance;
+                    closestCard = card;
+                    
+                    // Determine insert position based on mouse position relative to card
+                    // Check if mouse is within the card's vertical bounds (same row)
+                    const isInSameRow = mouseY >= cardRect.top && mouseY <= cardRect.bottom;
+                    // Check if mouse is within the card's horizontal bounds (same column)
+                    const isInSameColumn = mouseX >= cardRect.left && mouseX <= cardRect.right;
+                    
+                    // If mouse is in the same row (or very close), prioritize horizontal positioning
+                    if (isInSameRow || Math.abs(distanceY) < cardRect.height * 0.3) {
+                        // Horizontal positioning - left or right
+                        if (mouseX < cardCenterX) {
+                            insertPosition = 'left';
+                        } else {
+                            insertPosition = 'right';
+                        }
+                    } else if (isInSameColumn || Math.abs(distanceX) < cardRect.width * 0.3) {
+                        // Vertical positioning - top or bottom
+                        if (mouseY < cardCenterY) {
+                            insertPosition = 'before';
+                        } else {
+                            insertPosition = 'after';
+                        }
+                    } else {
+                        // Determine based on which axis has the smaller distance
+                        if (Math.abs(distanceX) < Math.abs(distanceY)) {
+                            // Closer horizontally - use left/right
+                            if (mouseX < cardCenterX) {
+                                insertPosition = 'left';
+                            } else {
+                                insertPosition = 'right';
+                            }
+                        } else {
+                            // Closer vertically - use top/bottom
+                            if (mouseY < cardCenterY) {
+                                insertPosition = 'before';
+                            } else {
+                                insertPosition = 'after';
+                            }
+                        }
+                    }
                 }
+            }
+            
+            // Show visual indicator
+            if (closestCard) {
+                const cardRect = closestCard.getBoundingClientRect();
+                const containerRect = el.getBoundingClientRect();
+                
+                // Remove all position classes first
+                closestCard.classList.remove('drag-over-before', 'drag-over-after', 'drag-over-left', 'drag-over-right');
+                
+                // Add appropriate class
+                if (insertPosition === 'before') {
+                    closestCard.classList.add('drag-over-before');
+                } else if (insertPosition === 'after') {
+                    closestCard.classList.add('drag-over-after');
+                } else if (insertPosition === 'left') {
+                    closestCard.classList.add('drag-over-left');
+                } else if (insertPosition === 'right') {
+                    closestCard.classList.add('drag-over-right');
+                }
+                
+                // Add drop indicator line
+                const indicator = document.createElement('div');
+                indicator.className = 'drop-indicator';
+                
+                if (insertPosition === 'left' || insertPosition === 'right') {
+                    // Horizontal indicator (vertical line on left or right)
+                    if (insertPosition === 'left') {
+                        indicator.style.left = (cardRect.left - containerRect.left - 2) + 'px';
+                        indicator.style.top = (cardRect.top - containerRect.top) + 'px';
+                        indicator.style.width = '3px';
+                        indicator.style.height = cardRect.height + 'px';
+                    } else {
+                        indicator.style.left = (cardRect.right - containerRect.left + 2) + 'px';
+                        indicator.style.top = (cardRect.top - containerRect.top) + 'px';
+                        indicator.style.width = '3px';
+                        indicator.style.height = cardRect.height + 'px';
+                    }
+                } else {
+                    // Vertical indicator (horizontal line on top or bottom)
+                    if (insertPosition === 'before') {
+                        indicator.style.top = (cardRect.top - containerRect.top - 2) + 'px';
+                    } else {
+                        indicator.style.top = (cardRect.bottom - containerRect.top + 2) + 'px';
+                    }
+                    indicator.style.left = (cardRect.left - containerRect.left) + 'px';
+                    indicator.style.width = cardRect.width + 'px';
+                    indicator.style.height = '3px';
+                }
+                
+                el.appendChild(indicator);
+            } else if (taskCards.length === 0) {
+                // Empty bucket - show indicator at top
+                const indicator = document.createElement('div');
+                indicator.className = 'drop-indicator';
+                indicator.style.top = '0px';
+                indicator.style.left = '0px';
+                indicator.style.width = '100%';
+                indicator.style.height = '3px';
+                el.appendChild(indicator);
             }
         });
         
@@ -920,8 +1314,10 @@ function initializeUI() {
             if (!el.contains(e.relatedTarget)) {
                 el.classList.remove('drag-over');
                 document.querySelectorAll('.task-card').forEach(card => {
-                    card.classList.remove('drag-over-task');
+                    card.classList.remove('drag-over-task', 'drag-over-before', 'drag-over-after', 'drag-over-left', 'drag-over-right');
                 });
+                const indicator = el.querySelector('.drop-indicator');
+                if (indicator) indicator.remove();
             }
         });
         
@@ -948,25 +1344,6 @@ function initializeUI() {
             openTaskModal();
         });
         
-        // Also make empty-bucket message clickable
-        const emptyBucket = el.querySelector('.empty-bucket');
-        if (emptyBucket) {
-            emptyBucket.style.cursor = 'pointer';
-            emptyBucket.addEventListener('click', (e) => {
-                if (hasDragged) return;
-                e.stopPropagation();
-                const bucket = el.closest('.bucket');
-                if (!bucket) return;
-                const bucketId = bucket.getAttribute('data-bucket');
-                if (!bucketId) return;
-                // Pre-select this bucket before opening modal
-                const bucketSelect = document.getElementById('taskBucket');
-                if (bucketSelect) {
-                    bucketSelect.value = bucketId;
-                }
-                openTaskModal();
-            });
-        }
     });
     
     // Set up drag and drop for flagged tasks section
@@ -1074,6 +1451,13 @@ function initializeUI() {
                     tasks.style.display = 'flex';
                     bucket.classList.remove('bucket-collapsed');
                     toggle.textContent = '▲';
+                    // Optimize card sizing after expanding
+                    setTimeout(() => {
+                        const taskCards = tasks.querySelectorAll('.task-card');
+                        if (taskCards.length > 0) {
+                            optimizeBucketCardSizing(tasks, taskCards.length);
+                        }
+                    }, 50);
                 } else {
                     tasks.style.display = 'none';
                     bucket.classList.add('bucket-collapsed');
@@ -1104,6 +1488,23 @@ function initializeUI() {
     
     // Initialize Pomodoro timer
     initializePomodoro();
+    
+    // Add window resize listener to recalculate card sizes
+    let resizeTimeout;
+    window.addEventListener('resize', () => {
+        clearTimeout(resizeTimeout);
+        resizeTimeout = setTimeout(() => {
+            optimizeAllBucketsCardSizing();
+            // Also optimize flagged tasks
+            const flaggedTasksContainer = document.getElementById('flaggedTasks');
+            if (flaggedTasksContainer) {
+                const taskCards = flaggedTasksContainer.querySelectorAll('.task-card');
+                if (taskCards.length > 0) {
+                    optimizeBucketCardSizing(flaggedTasksContainer, taskCards.length);
+                }
+            }
+        }, 250); // Debounce resize events
+    });
 }
 
 // Initialize Pomodoro timer event listeners
@@ -1452,34 +1853,73 @@ function parseNaturalDate(input) {
         return formatDateAsYYYYMMDD(date);
     }
     
-    // Try to parse as MM/DD format (assumes current year, or next year if date has passed)
-    const mmddMatch = text.match(/^(\d{1,2})\/(\d{1,2})$/);
+    // Month names (jan, january, feb, february, etc.)
+    const monthNames = {
+        'january': 1, 'jan': 1,
+        'february': 2, 'feb': 2,
+        'march': 3, 'mar': 3,
+        'april': 4, 'apr': 4,
+        'may': 5,
+        'june': 6, 'jun': 6,
+        'july': 7, 'jul': 7,
+        'august': 8, 'aug': 8,
+        'september': 9, 'sep': 9, 'sept': 9,
+        'october': 10, 'oct': 10,
+        'november': 11, 'nov': 11,
+        'december': 12, 'dec': 12
+    };
+    
+    // Try to parse month name with day (e.g., "jan 15", "january 15", "jan 15 2024")
+    const monthDayMatch = text.match(/^([a-z]+)\s+(\d{1,2})(?:\s+(\d{2,4}))?$/);
+    if (monthDayMatch) {
+        const monthName = monthDayMatch[1].toLowerCase();
+        const day = parseInt(monthDayMatch[2]);
+        const year = monthDayMatch[3] ? parseInt(monthDayMatch[3]) : today.getFullYear();
+        
+        if (monthNames[monthName] && day >= 1 && day <= 31) {
+            const month = monthNames[monthName];
+            // Validate the date is valid
+            const testDate = new Date(year, month - 1, day);
+            if (testDate.getMonth() === month - 1 && testDate.getDate() === day) {
+                // If 2-digit year, convert to 4-digit (assume 20xx if < 50, else 19xx)
+                const fullYear = year < 100 ? (year < 50 ? 2000 + year : 1900 + year) : year;
+                return formatDateAsYYYYMMDD(new Date(fullYear, month - 1, day));
+            }
+        }
+    }
+    
+    // Try to parse as MM/DD or MM/DD/YY format
+    const mmddMatch = text.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?$/);
     if (mmddMatch) {
         const month = parseInt(mmddMatch[1]);
         const day = parseInt(mmddMatch[2]);
+        let year = mmddMatch[3] ? parseInt(mmddMatch[3]) : today.getFullYear();
         
         if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+            // If 2-digit year, convert to 4-digit (assume 20xx if < 50, else 19xx)
+            if (year < 100) {
+                year = year < 50 ? 2000 + year : 1900 + year;
+            }
+            
             // Validate the date is valid (handles invalid dates like Feb 30)
-            // Create a test date to check if it's valid
-            const testDate = new Date(2024, month - 1, day);
-            if (testDate.getMonth() !== month - 1 || testDate.getDate() !== day) {
-                return null; // Invalid date
+            const testDate = new Date(year, month - 1, day);
+            if (testDate.getMonth() === month - 1 && testDate.getDate() === day) {
+                // Construct date string directly to avoid timezone issues
+                const monthStr = String(month).padStart(2, '0');
+                const dayStr = String(day).padStart(2, '0');
+                let dateStr = `${year}-${monthStr}-${dayStr}`;
+                
+                // If no year was provided and the date has already passed this year, use next year
+                if (!mmddMatch[3]) {
+                    const todayStr = formatDateAsYYYYMMDD(today);
+                    if (dateStr < todayStr) {
+                        year = year + 1;
+                        dateStr = `${year}-${monthStr}-${dayStr}`;
+                    }
+                }
+                
+                return dateStr;
             }
-            
-            let year = today.getFullYear();
-            // Construct date string directly to avoid timezone issues
-            const monthStr = String(month).padStart(2, '0');
-            const dayStr = String(day).padStart(2, '0');
-            let dateStr = `${year}-${monthStr}-${dayStr}`;
-            
-            // If the date has already passed this year, use next year
-            const todayStr = formatDateAsYYYYMMDD(today);
-            if (dateStr < todayStr) {
-                year = year + 1;
-                dateStr = `${year}-${monthStr}-${dayStr}`;
-            }
-            
-            return dateStr;
         }
     }
     
@@ -1511,6 +1951,38 @@ function parseNaturalDate(input) {
 // Handle task form submission
 function handleTaskSubmit() {
     const dueDateInput = document.getElementById('taskDueDate').value.trim();
+    const dueDateField = document.getElementById('taskDueDate');
+    
+    // If user provided a due date but it can't be parsed, show error
+    if (dueDateInput && !parseNaturalDate(dueDateInput)) {
+        // Show error on the field
+        dueDateField.style.borderColor = 'var(--danger-color)';
+        dueDateField.style.backgroundColor = 'rgba(239, 68, 68, 0.1)';
+        
+        // Show error message
+        let errorContainer = dueDateField.parentElement.querySelector('.date-error-message');
+        if (!errorContainer) {
+            errorContainer = document.createElement('div');
+            errorContainer.className = 'date-error-message';
+            errorContainer.style.cssText = 'color: var(--danger-color); font-size: 0.75rem; margin-top: 0.25rem; padding: 0.25rem 0.5rem; background: rgba(239, 68, 68, 0.1); border-radius: 4px;';
+            dueDateField.parentElement.appendChild(errorContainer);
+        }
+        errorContainer.textContent = `Unable to parse date "${dueDateInput}". Try formats like: 01/15/24, jan 15, january 15 2024, tomorrow, or next week`;
+        
+        // Remove error on next input
+        dueDateField.addEventListener('input', () => {
+            dueDateField.style.borderColor = '';
+            dueDateField.style.backgroundColor = '';
+            if (errorContainer) {
+                errorContainer.remove();
+            }
+        }, { once: true });
+        
+        // Focus the field
+        dueDateField.focus();
+        return; // Don't submit if date is invalid
+    }
+    
     const parsedDate = parseNaturalDate(dueDateInput);
     
     const formData = {

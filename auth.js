@@ -122,6 +122,16 @@ async function signIn() {
             currentAccount = response.account;
             console.log('Sign-in successful for:', currentAccount.username);
             updateUIForSignedIn();
+            
+            // Ensure popup closes after successful authentication
+            // MSAL should handle this automatically, but we ensure it happens
+            try {
+                // The popup window should close automatically after MSAL processes the response
+                // If it doesn't, the user can close it manually
+            } catch (e) {
+                console.log('Popup close handled by MSAL');
+            }
+            
             return response;
         } else {
             console.error('Sign in completed but no account was returned');

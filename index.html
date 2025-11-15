@@ -78,19 +78,9 @@
     <div class="container">
         <!-- Header -->
         <header class="header">
-            <h1>Task Manager</h1>
-            <div class="header-actions">
-                <button id="loginBtn" class="btn btn-primary">Sign In</button>
-                <span id="userInfo" class="user-info" style="display: none;"></span>
-                <button id="logoutBtn" class="btn btn-secondary" style="display: none;">Sign Out</button>
-            </div>
-        </header>
-
-        <!-- Main Content -->
-        <div class="main-content">
-            <!-- Top Bar -->
-            <div class="top-bar">
-                <div class="top-bar-left">
+            <div class="header-inner">
+                <h1>Task Manager</h1>
+                <div class="header-controls">
                     <button id="addTaskBtn" class="btn btn-primary">
                         <span class="icon">+</span> Add Task
                     </button>
@@ -98,14 +88,18 @@
                         <input type="text" id="searchInput" placeholder="Search tasks..." class="search-input">
                         <button id="searchClear" class="search-clear" style="display: none;" title="Clear search">✕</button>
                     </div>
-                </div>
-                <div class="top-bar-right">
                     <button id="pomodoroBtn" class="btn btn-pomodoro">🍅 Pomodoro</button>
-                    <button id="completedBtn" class="btn btn-completed">
-                        ✅ Completed
-                    </button>
+                </div>
+                <div class="header-actions">
+                    <button id="loginBtn" class="btn btn-primary">Sign In</button>
+                    <span id="userInfo" class="user-info" style="display: none;"></span>
+                    <button id="logoutBtn" class="btn btn-secondary" style="display: none;">Sign Out</button>
                 </div>
             </div>
+        </header>
+
+        <!-- Main Content -->
+        <div class="main-content">
 
             <!-- Pomodoro Timer Modal -->
             <div class="pomodoro-container" id="pomodoroContainer" style="display: none;">
@@ -123,10 +117,10 @@
                 </div>
             </div>
 
-            <!-- Flagged Tasks Section -->
-            <div id="flaggedSection" class="flagged-section">
+            <!-- High Priority Tasks Section -->
+            <div id="flaggedSection" class="flagged-section" style="display: none;">
                 <div class="flagged-header">
-                    <h2>🚩 Flagged Tasks</h2>
+                    <h2>🚩 High Priority Tasks</h2>
                     <span class="flagged-count" id="flaggedCount">0</span>
                 </div>
                 <div class="flagged-tasks" id="flaggedTasks"></div>
@@ -203,6 +197,13 @@
                 </div>
             </div>
 
+            <!-- Completed Button - Bottom right -->
+            <div class="completed-button-container">
+                <button id="completedBtn" class="btn btn-completed">
+                    ✅ Completed
+                </button>
+            </div>
+
             <!-- Completed Tasks View (hidden by default) -->
             <div id="completedView" class="completed-view" style="display: none;">
                 <div class="completed-view-header">
@@ -226,13 +227,13 @@
                 
                 <div class="form-group">
                     <label for="taskTitle">Title *</label>
-                    <input type="text" id="taskTitle" required>
+                    <textarea id="taskTitle" rows="2" required></textarea>
                 </div>
 
                 <div class="form-group">
                     <label for="taskDueDate">Due Date</label>
-                    <input type="text" id="taskDueDate" placeholder="e.g., tomorrow, next week, in 3 days, or 2024-12-25">
-                    <small class="form-hint">Enter a date or natural language like "tomorrow", "next week", "in 3 days"</small>
+                    <input type="text" id="taskDueDate" placeholder="e.g., 01/15/24, jan 15, january 15 2024, tomorrow, or next week">
+                    <small class="form-hint">Enter a date in mm/dd/yy format, month name (jan, january), or natural language</small>
                 </div>
 
                 <div class="form-group">

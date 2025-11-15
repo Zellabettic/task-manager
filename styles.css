@@ -67,18 +67,28 @@ body::before {
 
 /* Header */
 .header {
-    background: rgba(255, 255, 255, 0.9);
-    backdrop-filter: blur(24px) saturate(200%);
-    padding: 1.25rem 2rem;
+    background: rgba(255, 255, 255, 0.98);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    padding: 1rem 0;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05), 0 4px 12px rgba(0, 0, 0, 0.08);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
     position: sticky;
     top: 0;
     z-index: 100;
     border-bottom: 1px solid rgba(59, 130, 246, 0.1);
     margin-bottom: 0;
+    contain: layout style paint;
+}
+
+.header-inner {
+    max-width: 1800px;
+    margin: 0 auto;
+    padding: 0 2rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1.5rem;
+    flex-wrap: wrap;
 }
 
 .header h1 {
@@ -106,10 +116,37 @@ body::before {
     font-weight: 600;
 }
 
+.header-controls {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+    flex: 1;
+    max-width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+}
+
+/* Compact buttons in header */
+.header-controls .btn {
+    padding: 0.625rem 1.25rem;
+    font-size: 0.875rem;
+    white-space: nowrap;
+}
+
+.header-controls .btn-primary {
+    padding: 0.625rem 1.25rem;
+}
+
+.header-controls .btn-pomodoro,
+.header-controls .btn-completed {
+    padding: 0.625rem 1.25rem;
+}
+
 .header-actions {
     display: flex;
     gap: 1rem;
     align-items: center;
+    flex-shrink: 0;
 }
 
 .user-info {
@@ -211,6 +248,16 @@ body::before {
     padding: 2rem;
     max-width: 1800px;
     margin: 0 auto;
+    position: relative;
+}
+
+
+/* Completed Button Container - Bottom right */
+.completed-button-container {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 2rem;
+    padding-top: 1rem;
 }
 
 /* Top Bar */
@@ -235,8 +282,9 @@ body::before {
     align-items: center;
 }
 
-.top-bar .search-container {
+.header-controls .search-container {
     flex: 1;
+    min-width: 200px;
     max-width: 400px;
     margin: 0;
     display: flex;
@@ -271,7 +319,7 @@ body::before {
 
 .search-input {
     width: 100%;
-    padding: 0.75rem 2.5rem 0.75rem 1rem;
+    padding: 0.625rem 2.5rem 0.625rem 1rem;
     border: 1px solid var(--border-color);
     border-radius: 8px;
     font-size: 0.875rem;
@@ -319,20 +367,29 @@ body::before {
 /* Flagged Tasks Section */
 .flagged-section {
     margin-bottom: 2rem;
-    background: rgba(255, 255, 255, 0.95);
-    backdrop-filter: blur(10px);
+    background: rgba(255, 255, 255, 0.98);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
     border-radius: 16px;
     box-shadow: var(--shadow-lg);
-    padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    padding: 0; /* No outer padding - matches bucket structure */
+    overflow: hidden; /* Ensure rounded corners are visible */
+    contain: layout style paint;
 }
 
 .flagged-header {
+    padding: 1.25rem 1.5rem; /* Match bucket-header padding */
+    border-bottom: 2px solid var(--border-color);
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 1rem;
-    padding-bottom: 1rem;
-    border-bottom: 2px solid var(--border-color);
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.7));
+    transition: background-color 0.2s;
+    border-radius: 16px 16px 0 0; /* Rounded top corners */
+    position: relative;
+    z-index: 1;
 }
 
 .flagged-header h2 {
@@ -352,11 +409,18 @@ body::before {
 }
 
 .flagged-tasks {
-    display: flex;
-    gap: 1rem;
-    overflow-x: auto;
-    padding-bottom: 0.5rem;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    grid-auto-rows: auto;
+    gap: 0.75rem;
+    overflow-x: hidden;
+    overflow-y: visible;
+    padding: 1rem;
     min-height: auto;
+    width: 100%;
+    box-sizing: border-box;
+    align-content: flex-start;
+    justify-content: start;
 }
 
 .flagged-tasks::-webkit-scrollbar {
@@ -374,10 +438,16 @@ body::before {
 }
 
 .flagged-tasks .task-card {
-    min-width: 280px;
-    max-width: 320px;
-    flex-shrink: 0;
-    padding: 0.75rem;
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+    padding: 1rem;
+    box-sizing: border-box;
+    min-height: 120px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    align-items: stretch;
 }
 
 .flagged-tasks .task-header {
@@ -406,28 +476,34 @@ body::before {
 
 /* Buckets Container */
 .buckets-container {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    display: flex;
+    flex-direction: column;
     gap: 1.5rem;
-    align-items: start;
+    align-items: stretch;
 }
 
 /* Bucket */
 .bucket {
-    background: rgba(255, 255, 255, 0.95);
-    backdrop-filter: blur(10px);
+    background: rgba(255, 255, 255, 0.98);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
     border-radius: 16px;
     box-shadow: var(--shadow-lg);
     display: flex;
     flex-direction: column;
     min-height: 400px;
-    max-height: calc(100vh - 200px);
-    overflow: hidden;
-    transition: transform 0.2s, box-shadow 0.2s;
+    max-width: 100%;
+    overflow-x: hidden;
+    overflow-y: visible;
+    transition: box-shadow 0.2s;
+    width: 100%;
+    box-sizing: border-box;
+    height: auto;
+    position: relative;
+    contain: layout style paint;
 }
 
 .bucket:hover {
-    transform: translateY(-2px);
     box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
 }
 
@@ -439,6 +515,8 @@ body::before {
     align-items: center;
     background: linear-gradient(135deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.7));
     transition: background-color 0.2s;
+    position: relative;
+    z-index: 1;
 }
 
 .bucket-header.drag-over {
@@ -536,13 +614,21 @@ body::before {
 .bucket-tasks {
     flex: 1;
     padding: 1rem;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
+    overflow-y: visible;
+    overflow-x: hidden;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    grid-auto-rows: min-content;
     gap: 0.75rem;
+    align-content: flex-start;
+    justify-content: start;
     min-height: 200px;
     cursor: pointer;
     position: relative;
+    width: 100%;
+    box-sizing: border-box;
+    height: auto;
+    contain: layout;
 }
 
 
@@ -586,14 +672,30 @@ body::before {
     border-radius: 12px;
     padding: 1rem;
     cursor: pointer;
-    transition: all 0.2s;
+    transition: box-shadow 0.2s, border-color 0.2s;
     box-shadow: var(--shadow);
     position: relative;
+    width: 100%;
+    max-width: 240px;
+    min-width: 180px;
+    box-sizing: border-box;
+    min-height: 120px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden; /* Prevent content from overflowing */
+    align-items: stretch; /* Ensure children respect card width */
+    contain: layout style;
+}
+
+/* Task cards in buckets should respect grid column sizing */
+.bucket-tasks .task-card {
+    width: 100% !important;
+    max-width: none !important;
+    min-width: 0 !important; /* Allow cards to shrink to fit grid column */
 }
 
 .task-card:hover {
     box-shadow: var(--shadow-md);
-    transform: translateY(-2px);
     border-color: var(--primary-color);
 }
 
@@ -613,6 +715,46 @@ body::before {
     margin-top: 0.5rem;
 }
 
+.task-card.drag-over-before {
+    border-top: 4px solid var(--primary-color);
+    box-shadow: 0 -4px 8px rgba(99, 102, 241, 0.3);
+}
+
+.task-card.drag-over-after {
+    border-bottom: 4px solid var(--primary-color);
+    box-shadow: 0 4px 8px rgba(99, 102, 241, 0.3);
+}
+
+.task-card.drag-over-left {
+    border-left: 4px solid var(--primary-color);
+    box-shadow: -4px 0 8px rgba(99, 102, 241, 0.3);
+}
+
+.task-card.drag-over-right {
+    border-right: 4px solid var(--primary-color);
+    box-shadow: 4px 0 8px rgba(99, 102, 241, 0.3);
+}
+
+.drop-indicator {
+    position: absolute;
+    height: 3px;
+    background: var(--primary-color);
+    border-radius: 2px;
+    pointer-events: none;
+    z-index: 100;
+    box-shadow: 0 0 8px rgba(99, 102, 241, 0.6);
+    animation: pulse 1s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.6;
+    }
+}
+
 .task-card.done {
     opacity: 0.6;
 }
@@ -628,6 +770,8 @@ body::before {
     align-items: flex-start;
     margin-bottom: 0.5rem;
     gap: 0.5rem;
+    min-width: 0; /* Allow flex children to shrink */
+    flex-shrink: 0; /* Prevent header from shrinking too much */
 }
 
 .task-title {
@@ -636,6 +780,11 @@ body::before {
     color: var(--text-color);
     flex: 1;
     line-height: 1.4;
+    word-wrap: break-word;
+    word-break: break-word;
+    white-space: normal;
+    overflow-wrap: break-word;
+    min-width: 0; /* Allow text to shrink */
 }
 
 .task-actions {
@@ -702,6 +851,8 @@ body::before {
     gap: 0.5rem;
     margin-top: 0.75rem;
     font-size: 0.75rem;
+    min-width: 0; /* Allow wrapping */
+    flex-shrink: 0; /* Don't shrink meta section */
 }
 
 .priority-badge {
@@ -740,6 +891,16 @@ body::before {
     margin-top: 0.5rem;
     font-size: 0.85rem;
     line-height: 1.5;
+    word-wrap: break-word;
+    word-break: break-word;
+    overflow-wrap: break-word;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 5; /* Limit to 5 lines */
+    -webkit-box-orient: vertical;
+    min-width: 0; /* Allow text to shrink */
+    flex-shrink: 1; /* Allow description to shrink if needed */
 }
 
 .task-tags {
@@ -747,6 +908,8 @@ body::before {
     flex-wrap: wrap;
     gap: 0.375rem;
     margin-top: 0.5rem;
+    min-width: 0; /* Allow wrapping */
+    flex-shrink: 0; /* Don't shrink tags section */
 }
 
 .tag {
@@ -989,22 +1152,40 @@ body::before {
     }
 
     .header {
+        padding: 1rem 0;
+    }
+
+    .header-inner {
+        padding: 0 1rem;
         flex-direction: column;
         gap: 1rem;
-        align-items: flex-start;
+        align-items: stretch;
+    }
+
+    .header h1 {
+        font-size: 1.25rem;
+    }
+
+    .header-controls {
+        width: 100%;
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+
+    .header-controls .search-container {
+        width: 100%;
+        max-width: 100%;
+    }
+
+    .completed-button-container {
+        margin-top: 1.5rem;
+        justify-content: center; /* Center on mobile */
     }
 
     .header-actions {
         width: 100%;
         flex-wrap: wrap;
-    }
-
-    .top-bar {
-        flex-direction: column;
-    }
-
-    .search-container {
-        max-width: 100%;
+        justify-content: flex-start;
     }
 
     .form-row {

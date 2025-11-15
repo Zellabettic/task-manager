@@ -147,8 +147,50 @@ function toggleTaskFlag(taskId) {
         throw new Error('Task not found');
     }
     
+    const wasFlagged = task.flagged;
     task.flagged = !task.flagged;
     task.updatedAt = new Date().toISOString();
+    
+    // When flagging a task, set order to put it at the end of flagged tasks
+    if (task.flagged && !wasFlagged) {
+        // Get all currently flagged tasks to find max order
+        const flaggedTasks = tasks.filter(t => t.flagged === true && t.id !== taskId);
+        if (flaggedTasks.length > 0) {
+            // Find the maximum order value
+            const maxOrder = Math.max(...flaggedTasks.map(t => 
+                t.order || (t.createdAt ? new Date(t.createdAt).getTime() : 0)
+            ));
+            // Set order to be after the last flagged task
+            task.order = maxOrder + 10000;
+        } else {
+            // First flagged task - use current timestamp
+            task.order = Date.now();
+        }
+    }
+    
+    // When unflagging a task, set order to put it at the end of its bucket
+    if (!task.flagged && wasFlagged) {
+        // Get all tasks in the same bucket (excluding the current task, flagged tasks, and completed tasks)
+        const bucketTasks = tasks.filter(t => 
+            t.bucket === task.bucket && 
+            t.id !== taskId && 
+            !t.flagged && 
+            !t.completed
+        );
+        
+        if (bucketTasks.length > 0) {
+            // Find the maximum order value in the bucket
+            const maxOrder = Math.max(...bucketTasks.map(t => 
+                t.order || (t.createdAt ? new Date(t.createdAt).getTime() : 0)
+            ));
+            // Set order to be after the last task in the bucket
+            task.order = maxOrder + 10000;
+        } else {
+            // Empty bucket - use current timestamp
+            task.order = Date.now();
+        }
+    }
+    
     return task;
 }
 
