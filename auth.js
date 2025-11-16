@@ -218,38 +218,13 @@ function signOut() {
         saveLocalTasks({ version: '1.0', lastSync: new Date().toISOString(), tasks: [] });
     }
     
-    // Return to main view first (this will call renderBuckets internally)
-    if (typeof showMainView !== 'undefined') {
-        showMainView();
-    } else {
-        // Fallback: manually render if showMainView doesn't exist
-        if (typeof renderBuckets !== 'undefined') {
-            renderBuckets();
-        }
-    }
-    
-    // Also ensure completed view and bucket view are hidden
+    // Hide completed view if it's showing
     const completedView = document.getElementById('completedView');
     if (completedView) {
         completedView.style.display = 'none';
     }
     
-    const bucketView = document.getElementById('bucketView');
-    if (bucketView) {
-        bucketView.style.display = 'none';
-    }
-    
-    // Ensure buckets container and flagged section are visible
-    const bucketsContainer = document.querySelector('.buckets-container');
-    if (bucketsContainer) {
-        bucketsContainer.style.display = 'grid';
-    }
-    
-    const flaggedSection = document.getElementById('flaggedSection');
-    if (flaggedSection) {
-        flaggedSection.style.display = 'block';
-    }
-    
+    // Update UI to show sign-in page
     updateUIForSignedOut();
 }
 
@@ -294,6 +269,11 @@ function updateUIForSignedIn() {
         userInfo.textContent = `Signed in as ${currentAccount.username}`;
         userInfo.style.display = 'inline-block';
     }
+    
+    // Show main content, hide sign-in page
+    if (typeof showMainContent === 'function') {
+        showMainContent();
+    }
 }
 
 function updateUIForSignedOut() {
@@ -306,6 +286,11 @@ function updateUIForSignedOut() {
     if (userInfo) {
         userInfo.textContent = '';
         userInfo.style.display = 'none'; // Hide user info
+    }
+    
+    // Show sign-in page, hide main content
+    if (typeof showSignInPage === 'function') {
+        showSignInPage();
     }
 }
 

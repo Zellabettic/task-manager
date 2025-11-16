@@ -3,6 +3,136 @@ let currentEditingTaskId = null;
 let draggedTaskId = null;
 let dragStartPosition = null; // Store initial drag position
 
+// Render day buckets with dates
+function renderDayBuckets() {
+    const dayBuckets = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'];
+    const searchTerm = document.getElementById('searchInput')?.value.toLowerCase() || '';
+    const tasksToRender = searchTerm ? filterTasksBySearch(searchTerm) : getAllTasks();
+    
+    dayBuckets.forEach(dayName => {
+        const bucketElement = document.getElementById(`bucket-${dayName}`);
+        const titleElement = document.getElementById(`${dayName}-title`);
+        if (!bucketElement || !titleElement) return;
+        
+        // Get date for this day (using task-manager function)
+        let dayDate = null;
+        if (typeof getDateForDay === 'function') {
+            dayDate = getDateForDay(dayName);
+        }
+        if (dayDate) {
+            // Parse YYYY-MM-DD format
+            const dateParts = dayDate.split('-');
+            if (dateParts.length === 3) {
+                const year = parseInt(dateParts[0]);
+                const month = parseInt(dateParts[1]) - 1;
+                const day = parseInt(dateParts[2]);
+                const date = new Date(year, month, day);
+                const dateStr = formatDate(date);
+                titleElement.textContent = `${dayName.charAt(0).toUpperCase() + dayName.slice(1)}, ${dateStr}`;
+            }
+        } else {
+            titleElement.textContent = dayName.charAt(0).toUpperCase() + dayName.slice(1);
+        }
+        
+        // Get tasks for this day bucket
+        let bucketTasks = tasksToRender.filter(task => {
+            if (task.bucket !== dayName) return false;
+            if (task.completed) return false;
+            if (task.flagged) return false;
+            return true;
+        });
+        
+        // Sort tasks
+        bucketTasks.sort((a, b) => {
+            const orderA = a.order ?? (a.createdAt ? new Date(a.createdAt).getTime() : 0);
+            const orderB = b.order ?? (b.createdAt ? new Date(b.createdAt).getTime() : 0);
+            if (orderA !== orderB) {
+                return orderA - orderB;
+            }
+            if (a.dueDate && b.dueDate) {
+                return new Date(a.dueDate) - new Date(b.dueDate);
+            }
+            if (a.dueDate) return -1;
+            if (b.dueDate) return 1;
+            return 0;
+        });
+        
+        // Update count
+        const countElement = document.getElementById(`count-${dayName}`);
+        if (countElement) {
+            const totalCount = getAllTasks().filter(t => 
+                t.bucket === dayName && !t.flagged && !t.completed
+            ).length;
+            countElement.textContent = totalCount;
+        }
+        
+        // Get the day bucket container
+        const dayBucketContainer = document.querySelector(`[data-bucket="${dayName}"]`);
+        
+        // When searching, hide day buckets without matches
+        if (searchTerm) {
+            if (bucketTasks.length === 0) {
+                // Hide the entire day bucket if no matches
+                if (dayBucketContainer) {
+                    dayBucketContainer.style.display = 'none';
+                }
+                bucketElement.innerHTML = '';
+            } else {
+                // Show the day bucket if it has matches
+                if (dayBucketContainer) {
+                    dayBucketContainer.style.display = 'flex';
+                }
+                bucketElement.innerHTML = bucketTasks.map(task => createTaskCard(task)).join('');
+                
+                // Attach event listeners
+                bucketTasks.forEach(task => {
+                    attachTaskEventListeners(task.id);
+                });
+                
+                // Optimize card sizing
+                optimizeBucketCardSizing(bucketElement, bucketTasks.length);
+            }
+        } else {
+            // Not searching - show all day buckets
+            if (dayBucketContainer) {
+                dayBucketContainer.style.display = 'flex';
+            }
+            
+            // Render tasks
+            if (bucketTasks.length === 0) {
+                bucketElement.innerHTML = '';
+            } else {
+                bucketElement.innerHTML = bucketTasks.map(task => createTaskCard(task)).join('');
+                
+                // Attach event listeners
+                bucketTasks.forEach(task => {
+                    attachTaskEventListeners(task.id);
+                });
+                
+                // Optimize card sizing
+                optimizeBucketCardSizing(bucketElement, bucketTasks.length);
+            }
+        }
+        
+        // Make bucket header clickable to add task
+        const bucketHeader = document.getElementById(`${dayName}-header`);
+        if (bucketHeader && !bucketHeader.dataset.addTaskListener) {
+            bucketHeader.dataset.addTaskListener = 'true';
+            bucketHeader.style.cursor = 'pointer';
+            bucketHeader.addEventListener('click', (e) => {
+                if (e.target.closest('.bucket-toggle') || e.target.closest('.bucket-count')) return;
+                if (hasDragged) return;
+                e.stopPropagation();
+                const bucketSelect = document.getElementById('taskBucket');
+                if (bucketSelect) {
+                    bucketSelect.value = dayName;
+                }
+                openTaskModal();
+            });
+        }
+    });
+}
+
 // Render all buckets
 function renderBuckets() {
     const buckets = ['this-week', 'next-week', 'this-month', 'next-month', 'recurring', 'someday'];
@@ -11,8 +141,22 @@ function renderBuckets() {
     // Get filtered tasks if searching
     const tasksToRender = searchTerm ? filterTasksBySearch(searchTerm) : getAllTasks();
     
+    // Hide/show completed button based on search
+    const completedBtn = document.getElementById('completedBtn');
+    const completedButtonContainer = document.querySelector('.completed-button-container');
+    if (completedBtn && completedButtonContainer) {
+        if (searchTerm) {
+            completedButtonContainer.style.display = 'none';
+        } else {
+            completedButtonContainer.style.display = 'flex';
+        }
+    }
+    
     // Render flagged tasks section (exclude completed tasks from flagged section)
     renderFlaggedTasks(tasksToRender.filter(task => !task.completed));
+    
+    // Render day buckets
+    renderDayBuckets();
     
     buckets.forEach(bucket => {
         const bucketElement = document.getElementById(`bucket-${bucket}`);
@@ -183,6 +327,17 @@ function renderBuckets() {
     // Optimize card sizing for all buckets after a short delay to ensure layout is complete
     setTimeout(() => {
         optimizeAllBucketsCardSizing();
+        // Also optimize day buckets
+        const dayBuckets = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'];
+        dayBuckets.forEach(dayName => {
+            const dayBucketElement = document.getElementById(`bucket-${dayName}`);
+            if (dayBucketElement) {
+                const taskCards = dayBucketElement.querySelectorAll('.task-card');
+                if (taskCards.length > 0) {
+                    optimizeBucketCardSizing(dayBucketElement, taskCards.length);
+                }
+            }
+        });
         // Also optimize flagged tasks
         const flaggedTasksContainer = document.getElementById('flaggedTasks');
         if (flaggedTasksContainer) {
@@ -1479,8 +1634,45 @@ function initializeUI() {
     }
     
     // Set up toggle for all buckets
+    const dayBuckets = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'];
     const buckets = ['this-week', 'next-week', 'this-month', 'next-month', 'recurring', 'someday'];
     const topRowBuckets = ['this-week', 'next-week', 'this-month'];
+    
+    // Set up toggles for day buckets (always expanded)
+    dayBuckets.forEach(bucketId => {
+        const toggle = document.getElementById(`${bucketId}-toggle`);
+        const tasks = document.getElementById(`bucket-${bucketId}`);
+        const bucket = document.querySelector(`[data-bucket="${bucketId}"]`);
+        
+        if (toggle && tasks && bucket) {
+            // Day buckets are always expanded
+            tasks.style.display = 'flex';
+            bucket.classList.remove('bucket-collapsed');
+            toggle.textContent = '▲';
+            
+            toggle.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const isCollapsed = tasks.style.display === 'none';
+                
+                if (isCollapsed) {
+                    tasks.style.display = 'flex';
+                    bucket.classList.remove('bucket-collapsed');
+                    toggle.textContent = '▲';
+                    // Optimize card sizing after expanding
+                    setTimeout(() => {
+                        const taskCards = tasks.querySelectorAll('.task-card');
+                        if (taskCards.length > 0) {
+                            optimizeBucketCardSizing(tasks, taskCards.length);
+                        }
+                    }, 50);
+                } else {
+                    tasks.style.display = 'none';
+                    bucket.classList.add('bucket-collapsed');
+                    toggle.textContent = '▼';
+                }
+            });
+        }
+    });
     
     buckets.forEach(bucketId => {
         const toggle = document.getElementById(`${bucketId}-toggle`);
@@ -1528,6 +1720,14 @@ function initializeUI() {
         }
     });
     
+    // Task Manager title - link back to main page
+    const taskManagerTitle = document.getElementById('taskManagerTitle');
+    if (taskManagerTitle) {
+        taskManagerTitle.addEventListener('click', () => {
+            showMainView();
+        });
+    }
+    
     // Completed button - show completed view
     const completedBtn = document.getElementById('completedBtn');
     const completedView = document.getElementById('completedView');
@@ -1556,6 +1756,17 @@ function initializeUI() {
         clearTimeout(resizeTimeout);
         resizeTimeout = setTimeout(() => {
             optimizeAllBucketsCardSizing();
+            // Also optimize day buckets
+            const dayBuckets = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'];
+            dayBuckets.forEach(dayName => {
+                const dayBucketElement = document.getElementById(`bucket-${dayName}`);
+                if (dayBucketElement) {
+                    const taskCards = dayBucketElement.querySelectorAll('.task-card');
+                    if (taskCards.length > 0) {
+                        optimizeBucketCardSizing(dayBucketElement, taskCards.length);
+                    }
+                }
+            });
             // Also optimize flagged tasks
             const flaggedTasksContainer = document.getElementById('flaggedTasks');
             if (flaggedTasksContainer) {
@@ -1609,23 +1820,63 @@ function showCompletedView() {
     const completedView = document.getElementById('completedView');
     const bucketsContainer = document.querySelector('.buckets-container');
     const flaggedSection = document.getElementById('flaggedSection');
+    const dayBucketsContainer = document.querySelector('.day-buckets-container');
+    const completedButtonContainer = document.querySelector('.completed-button-container');
     
     if (completedView && bucketsContainer) {
         bucketsContainer.style.display = 'none';
         if (flaggedSection) flaggedSection.style.display = 'none';
+        if (dayBucketsContainer) dayBucketsContainer.style.display = 'none';
+        if (completedButtonContainer) completedButtonContainer.style.display = 'none';
         completedView.style.display = 'block';
         renderCompletedView();
     }
 }
 
 // Show main view
+// Show sign-in page and hide main content
+function showSignInPage() {
+    const signInPage = document.getElementById('signInPage');
+    const mainContent = document.getElementById('mainContent');
+    const header = document.querySelector('.header');
+    
+    if (signInPage) signInPage.style.display = 'flex';
+    if (mainContent) mainContent.style.display = 'none';
+    // Hide header controls when not signed in
+    if (header) {
+        const headerControls = header.querySelector('.header-controls');
+        if (headerControls) headerControls.style.display = 'none';
+    }
+}
+
+// Show main content and hide sign-in page
+function showMainContent() {
+    const signInPage = document.getElementById('signInPage');
+    const mainContent = document.getElementById('mainContent');
+    const header = document.querySelector('.header');
+    
+    if (signInPage) signInPage.style.display = 'none';
+    if (mainContent) mainContent.style.display = 'block';
+    // Show header controls when signed in
+    if (header) {
+        const headerControls = header.querySelector('.header-controls');
+        if (headerControls) headerControls.style.display = 'flex';
+    }
+}
+
 function showMainView() {
     const completedView = document.getElementById('completedView');
     const bucketsContainer = document.querySelector('.buckets-container');
+    const flaggedSection = document.getElementById('flaggedSection');
+    const dayBucketsContainer = document.querySelector('.day-buckets-container');
+    const completedButtonContainer = document.querySelector('.completed-button-container');
     
     if (completedView && bucketsContainer) {
         completedView.style.display = 'none';
         bucketsContainer.style.display = 'grid';
+        if (flaggedSection) flaggedSection.style.display = 'flex';
+        if (dayBucketsContainer) dayBucketsContainer.style.display = 'grid';
+        if (completedButtonContainer) completedButtonContainer.style.display = 'flex';
         renderBuckets();
     }
 }
@@ -1633,9 +1884,15 @@ function showMainView() {
 // Render completed tasks view
 function renderCompletedView() {
     const completedTasksGrid = document.getElementById('completedTasksGrid');
+    const completedCountElement = document.getElementById('count-completed');
     if (!completedTasksGrid) return;
     
     const completedTasks = getAllTasks().filter(task => task.completed === true);
+    
+    // Update count
+    if (completedCountElement) {
+        completedCountElement.textContent = completedTasks.length;
+    }
     
     // Sort by completed date (most recent first)
     completedTasks.sort((a, b) => {
@@ -1645,7 +1902,7 @@ function renderCompletedView() {
     });
     
     if (completedTasks.length === 0) {
-        completedTasksGrid.innerHTML = '<p style="text-align: center; color: var(--text-light); padding: 2rem;">No completed tasks yet.</p>';
+        completedTasksGrid.innerHTML = '';
     } else {
         completedTasksGrid.innerHTML = completedTasks.map(task => createTaskCard(task)).join('');
         
@@ -1677,6 +1934,9 @@ function renderCompletedView() {
                 }
             }
         });
+        
+        // Optimize card sizing for completed tasks
+        optimizeBucketCardSizing(completedTasksGrid, completedTasks.length);
     }
 }
 

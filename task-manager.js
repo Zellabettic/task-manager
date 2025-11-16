@@ -2,7 +2,7 @@
 let tasks = [];
 
 // Bucket definitions
-const BUCKETS = ['this-week', 'next-week', 'this-month', 'next-month', 'recurring', 'someday'];
+const BUCKETS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'this-week', 'next-week', 'this-month', 'next-month', 'recurring', 'someday'];
 
 // Generate unique ID
 function generateId() {
@@ -128,6 +128,43 @@ function updateTask(id, taskData) {
     return updatedTask;
 }
 
+// Get date for a day of the week (Monday = 1, Tuesday = 2, etc.)
+function getDateForDay(dayName) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const dayMap = {
+        'monday': 1,
+        'tuesday': 2,
+        'wednesday': 3,
+        'thursday': 4,
+        'friday': 5
+    };
+    
+    const targetDay = dayMap[dayName.toLowerCase()];
+    if (!targetDay) return null;
+    
+    const currentDay = today.getDay(); // 0 = Sunday, 1 = Monday, etc.
+    // Calculate days until target day
+    let daysUntilTarget = (targetDay - currentDay + 7) % 7;
+    // If it's 0, we're on that day, but if it's past that day this week, get next week
+    if (daysUntilTarget === 0) {
+        // If we're on the target day, use today
+        // If we're past it (e.g., it's Saturday and we want Monday), get next week
+        if (currentDay > targetDay || currentDay === 0) {
+            daysUntilTarget = 7;
+        }
+    }
+    
+    const targetDate = new Date(today);
+    targetDate.setDate(today.getDate() + daysUntilTarget);
+    
+    // Format as YYYY-MM-DD
+    const year = targetDate.getFullYear();
+    const month = String(targetDate.getMonth() + 1).padStart(2, '0');
+    const day = String(targetDate.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
 // Move task to bucket
 function moveTaskToBucket(taskId, newBucket) {
     const task = getTaskById(taskId);
@@ -136,6 +173,16 @@ function moveTaskToBucket(taskId, newBucket) {
     }
     
     task.bucket = newBucket;
+    
+    // If moving to a day bucket, set the due date to that day
+    const dayBuckets = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'];
+    if (dayBuckets.includes(newBucket)) {
+        const dayDate = getDateForDay(newBucket);
+        if (dayDate) {
+            task.dueDate = dayDate;
+        }
+    }
+    
     task.updatedAt = new Date().toISOString();
     return task;
 }
@@ -443,8 +490,9 @@ function loadTasks(data) {
                     task.bucket = task.dueDate ? determineBucketFromDate(task.dueDate) : 'this-week';
                 }
             }
-            // Ensure bucket is valid
-            if (!BUCKETS.includes(task.bucket)) {
+            // Ensure bucket is valid (including day buckets)
+            const allValidBuckets = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', ...BUCKETS];
+            if (!allValidBuckets.includes(task.bucket)) {
                 task.bucket = 'this-week';
             }
             // If recurring is enabled, ensure bucket is recurring
@@ -488,11 +536,61 @@ function filterTasksBySearch(searchTerm) {
     if (!searchTerm) return tasks;
     
     const term = searchTerm.toLowerCase();
-    return tasks.filter(task => 
-        task.title.toLowerCase().includes(term) ||
-        task.description.toLowerCase().includes(term) ||
-        task.tags.some(tag => tag.toLowerCase().includes(term))
-    );
+    return tasks.filter(task => {
+        // Search in title
+        if (task.title.toLowerCase().includes(term)) return true;
+        
+        // Search in description
+        if (task.description && task.description.toLowerCase().includes(term)) return true;
+        
+        // Search in tags
+        if (task.tags && task.tags.some(tag => tag.toLowerCase().includes(term))) return true;
+        
+        // Search in due date
+        if (task.dueDate) {
+            // Format date for searching (e.g., "01/15/24", "jan 15", "monday", etc.)
+            try {
+                const dateParts = task.dueDate.split('-');
+                if (dateParts.length === 3) {
+                    const year = parseInt(dateParts[0]);
+                    const month = parseInt(dateParts[1]) - 1;
+                    const day = parseInt(dateParts[2]);
+                    const date = new Date(year, month, day);
+                    
+                    // Check formatted date (e.g., "Mon, Jan 15")
+                    // Format as "Mon, Jan 15" for searching
+                    const dayNamesShort = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+                    const monthNamesShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                    const formattedDate = `${dayNamesShort[date.getDay()]}, ${monthNamesShort[month]} ${day}`.toLowerCase();
+                    if (formattedDate.includes(term)) return true;
+                    
+                    // Check date parts
+                    const monthNamesFull = ['january', 'february', 'march', 'april', 'may', 'june', 
+                                      'july', 'august', 'september', 'october', 'november', 'december'];
+                    const monthName = monthNamesFull[month].toLowerCase();
+                    const monthAbbr = monthName.substring(0, 3);
+                    const dayNamesFull = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+                    const dayName = dayNamesFull[date.getDay()].toLowerCase();
+                    const dayAbbr = dayName.substring(0, 3);
+                    
+                    // Check various date formats
+                    if (monthName.includes(term) || monthAbbr.includes(term)) return true;
+                    if (dayName.includes(term) || dayAbbr.includes(term)) return true;
+                    if (String(day).includes(term)) return true;
+                    if (String(month + 1).includes(term)) return true;
+                    if (String(year).includes(term) || String(year).slice(-2).includes(term)) return true;
+                    
+                    // Check mm/dd/yy format
+                    const mmdd = `${String(month + 1).padStart(2, '0')}/${String(day).padStart(2, '0')}/${String(year).slice(-2)}`;
+                    if (mmdd.includes(term)) return true;
+                }
+            } catch (e) {
+                // If date parsing fails, continue without matching on date
+            }
+        }
+        
+        return false;
+    });
 }
 
 // Get bucket counts

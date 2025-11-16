@@ -13,14 +13,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         localStorage.removeItem('tasks');
         
-        // Show empty UI
-        if (typeof showMainView !== 'undefined') {
-            showMainView();
-        } else if (typeof renderBuckets !== 'undefined') {
-            renderBuckets();
-        }
+        // Show sign-in page, hide main content and header controls
+        showSignInPage();
     } else {
-        // User is signed in - load tasks from OneDrive (or localStorage as fallback)
+        // User is signed in - show main content and load tasks
+        showMainContent();
         try {
             const data = await syncWithOneDrive();
             if (data) {
@@ -45,8 +42,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
-    // Sign in button
-    document.getElementById('loginBtn').addEventListener('click', async () => {
+    // Sign in button (header)
+    document.getElementById('loginBtn').addEventListener('click', handleSignIn);
+    
+    // Sign in button (sign-in page)
+    const signInPageBtn = document.getElementById('signInPageBtn');
+    if (signInPageBtn) {
+        signInPageBtn.addEventListener('click', handleSignIn);
+    }
+    
+    // Handle sign in
+    async function handleSignIn() {
         try {
             console.log('Attempting sign in...');
             console.log('Current URL:', window.location.href);
@@ -61,13 +67,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             // Auto-sync after sign in
             await syncWithOneDrive();
             loadTasks(getLocalTasks());
+            showMainContent();
             renderBuckets();
             console.log('Initial sync complete');
         } catch (error) {
             console.error('Sign in error:', error);
             // Error message already shown in signIn() function
         }
-    });
+    }
 
     // Sign out button
     document.getElementById('logoutBtn').addEventListener('click', () => {
