@@ -42,19 +42,28 @@ function renderDayBuckets() {
             return true;
         });
         
-        // Sort tasks
+        // Sort tasks - tasks with due dates come first
         bucketTasks.sort((a, b) => {
+            // Primary sort: tasks with due dates come first
+            const aHasDueDate = !!a.dueDate;
+            const bHasDueDate = !!b.dueDate;
+            
+            if (aHasDueDate && !bHasDueDate) return -1; // a comes first
+            if (!aHasDueDate && bHasDueDate) return 1;  // b comes first
+            
+            // Both have due dates or both don't - sort by due date if both have it
+            if (aHasDueDate && bHasDueDate) {
+                const dateA = new Date(a.dueDate).getTime();
+                const dateB = new Date(b.dueDate).getTime();
+                if (dateA !== dateB) {
+                    return dateA - dateB; // Earlier dates first
+                }
+            }
+            
+            // Secondary sort: by order (for drag and drop)
             const orderA = a.order ?? (a.createdAt ? new Date(a.createdAt).getTime() : 0);
             const orderB = b.order ?? (b.createdAt ? new Date(b.createdAt).getTime() : 0);
-            if (orderA !== orderB) {
-                return orderA - orderB;
-            }
-            if (a.dueDate && b.dueDate) {
-                return new Date(a.dueDate) - new Date(b.dueDate);
-            }
-            if (a.dueDate) return -1;
-            if (b.dueDate) return 1;
-            return 0;
+            return orderA - orderB;
         });
         
         // Update count
@@ -226,22 +235,26 @@ function renderBuckets() {
             });
         } else {
             bucketTasks.sort((a, b) => {
-                // Use order if it exists, otherwise fall back to createdAt
+                // Primary sort: tasks with due dates come first
+                const aHasDueDate = !!a.dueDate;
+                const bHasDueDate = !!b.dueDate;
+                
+                if (aHasDueDate && !bHasDueDate) return -1; // a comes first
+                if (!aHasDueDate && bHasDueDate) return 1;  // b comes first
+                
+                // Both have due dates or both don't - sort by due date if both have it
+                if (aHasDueDate && bHasDueDate) {
+                    const dateA = new Date(a.dueDate).getTime();
+                    const dateB = new Date(b.dueDate).getTime();
+                    if (dateA !== dateB) {
+                        return dateA - dateB; // Earlier dates first
+                    }
+                }
+                
+                // Secondary sort: by order (for drag and drop)
                 const orderA = a.order ?? (a.createdAt ? new Date(a.createdAt).getTime() : 0);
                 const orderB = b.order ?? (b.createdAt ? new Date(b.createdAt).getTime() : 0);
-                
-                // Primary sort: by order
-                if (orderA !== orderB) {
-                    return orderA - orderB;
-                }
-                
-                // Secondary sort: by due date
-                if (a.dueDate && b.dueDate) {
-                    return new Date(a.dueDate) - new Date(b.dueDate);
-                }
-                if (a.dueDate) return -1;
-                if (b.dueDate) return 1;
-                return 0;
+                return orderA - orderB;
             });
         }
         
