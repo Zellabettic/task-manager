@@ -182,16 +182,7 @@ async function signIn() {
 // Sign out
 function signOut() {
     // Clear MSAL cache from sessionStorage (no popup)
-    if (msalInstance) {
-        try {
-            // Clear all accounts from cache
-            msalInstance.clearCache();
-        } catch (error) {
-            console.log('Error clearing MSAL cache:', error);
-        }
-    }
-    
-    // Also manually clear sessionStorage items related to MSAL
+    // Note: MSAL v3 doesn't have clearCache(), so we manually clear sessionStorage
     try {
         const keys = Object.keys(sessionStorage);
         keys.forEach(key => {
