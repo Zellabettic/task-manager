@@ -129,40 +129,177 @@ function updateTask(id, taskData) {
 }
 
 // Get date for a day of the week (Monday = 1, Tuesday = 2, etc.)
+// Only shows current week's dates until Saturday, then shows next week
 function getDateForDay(dayName) {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const dayMap = {
-        'monday': 1,
-        'tuesday': 2,
-        'wednesday': 3,
-        'thursday': 4,
-        'friday': 5
-    };
-    
-    const targetDay = dayMap[dayName.toLowerCase()];
-    if (!targetDay) return null;
-    
-    const currentDay = today.getDay(); // 0 = Sunday, 1 = Monday, etc.
-    // Calculate days until target day
-    let daysUntilTarget = (targetDay - currentDay + 7) % 7;
-    // If it's 0, we're on that day, but if it's past that day this week, get next week
-    if (daysUntilTarget === 0) {
-        // If we're on the target day, use today
-        // If we're past it (e.g., it's Saturday and we want Monday), get next week
-        if (currentDay > targetDay || currentDay === 0) {
+    try {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const dayMap = {
+            'monday': 1,
+            'tuesday': 2,
+            'wednesday': 3,
+            'thursday': 4,
+            'friday': 5
+        };
+        
+        const targetDay = dayMap[dayName.toLowerCase()];
+        if (!targetDay) return null;
+        
+        const currentDay = today.getDay(); // 0 = Sunday, 1 = Monday, etc.
+        
+        let daysUntilTarget;
+        
+        if (currentDay === 6) {
+            // It's Saturday - show next week's dates for all days
+            // Next Monday is 2 days away, next Tuesday is 3, etc.
+            daysUntilTarget = targetDay + 1;
+        } else if (currentDay === 0) {
+            // It's Sunday - show next week's dates for all days
+            // Next Monday is 1 day away, next Tuesday is 2, etc.
+            daysUntilTarget = targetDay;
+        } else {
+            // It's Monday-Friday - show this week's dates only for remaining days
+            // Calculate days until target day in this week
+            if (currentDay <= targetDay) {
+                // Target day is today or in the future this week
+                daysUntilTarget = targetDay - currentDay;
+            } else {
+                // Target day has already passed this week - this shouldn't happen since we hide those buckets
+                // But if it does, calculate the date anyway
+                const daysSinceMonday = currentDay - 1;
+                const thisWeekMonday = new Date(today);
+                thisWeekMonday.setDate(today.getDate() - daysSinceMonday);
+                thisWeekMonday.setHours(0, 0, 0, 0);
+                const targetDateThisWeek = new Date(thisWeekMonday);
+                targetDateThisWeek.setDate(thisWeekMonday.getDate() + (targetDay - 1));
+                targetDateThisWeek.setHours(0, 0, 0, 0);
+                daysUntilTarget = Math.floor((targetDateThisWeek.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+            }
+        }
+        
+        const targetDate = new Date(today);
+        targetDate.setDate(today.getDate() + daysUntilTarget);
+        targetDate.setHours(0, 0, 0, 0);
+        
+        // Format as YYYY-MM-DD
+        const year = targetDate.getFullYear();
+        const month = String(targetDate.getMonth() + 1).padStart(2, '0');
+        const day = String(targetDate.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    } catch (error) {
+        console.error('Error in getDateForDay:', error, dayName);
+        // Fallback to original simple logic if there's an error
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const dayMap = {
+            'monday': 1,
+            'tuesday': 2,
+            'wednesday': 3,
+            'thursday': 4,
+            'friday': 5
+        };
+        const targetDay = dayMap[dayName.toLowerCase()];
+        if (!targetDay) return null;
+        const currentDay = today.getDay();
+        let daysUntilTarget = (targetDay - currentDay + 7) % 7;
+        if (daysUntilTarget === 0 && currentDay !== targetDay) {
             daysUntilTarget = 7;
         }
+        const targetDate = new Date(today);
+        targetDate.setDate(today.getDate() + daysUntilTarget);
+        const year = targetDate.getFullYear();
+        const month = String(targetDate.getMonth() + 1).padStart(2, '0');
+        const day = String(targetDate.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    }
+}
+
+// Get the next weekday bucket (Monday->Tuesday, Friday->Monday)
+function getNextWeekdayBucket(currentBucket) {
+    const dayBuckets = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'];
+    const currentIndex = dayBuckets.indexOf(currentBucket.toLowerCase());
+    if (currentIndex === -1) return null;
+    
+    // If Friday, wrap to Monday
+    if (currentIndex === 4) {
+        return 'monday';
     }
     
-    const targetDate = new Date(today);
-    targetDate.setDate(today.getDate() + daysUntilTarget);
-    
-    // Format as YYYY-MM-DD
-    const year = targetDate.getFullYear();
-    const month = String(targetDate.getMonth() + 1).padStart(2, '0');
-    const day = String(targetDate.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
+    return dayBuckets[currentIndex + 1];
+}
+
+// Move tasks from past day buckets to the next weekday
+function movePastDayTasksForward() {
+    try {
+        const dayBuckets = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'];
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        
+        // Safety check - make sure tasks array exists
+        if (!tasks || !Array.isArray(tasks)) {
+            console.warn('Tasks array not available for movePastDayTasksForward');
+            return;
+        }
+        
+        // Find all tasks in day buckets where the bucket's date is in the past
+        // We move based on the bucket date, not the task's due date
+        const tasksToMove = tasks.filter(task => {
+            try {
+                // Only process tasks in day buckets that are not completed or flagged
+                if (!task || !task.bucket || !dayBuckets.includes(task.bucket) || task.completed || task.flagged) {
+                    return false;
+                }
+                
+                // Get the date this bucket currently represents
+                if (typeof getDateForDay !== 'function') {
+                    return false;
+                }
+                
+                const bucketDateStr = getDateForDay(task.bucket);
+                if (!bucketDateStr) return false;
+                
+                // Parse the bucket date
+                const bucketDateParts = bucketDateStr.split('-');
+                if (bucketDateParts.length !== 3) return false;
+                
+                const bucketDate = new Date(
+                    parseInt(bucketDateParts[0]),
+                    parseInt(bucketDateParts[1]) - 1,
+                    parseInt(bucketDateParts[2])
+                );
+                bucketDate.setHours(0, 0, 0, 0);
+                
+                // If the bucket's date is in the past, move the task to the next weekday
+                // This moves Monday→Tuesday, Tuesday→Wednesday, etc., regardless of the task's due date
+                if (bucketDate < today) {
+                    return true;
+                }
+                
+                return false;
+            } catch (error) {
+                console.error('Error filtering task in movePastDayTasksForward:', error, task);
+                return false;
+            }
+        });
+        
+        // Move each task to the next weekday
+        // Don't change the task's due date - just move it to the next weekday bucket
+        tasksToMove.forEach(task => {
+            try {
+                const nextBucket = getNextWeekdayBucket(task.bucket);
+                if (nextBucket) {
+                    task.bucket = nextBucket;
+                    // Keep the original due date - don't change it
+                    task.updatedAt = new Date().toISOString();
+                }
+            } catch (error) {
+                console.error('Error moving task in movePastDayTasksForward:', error, task);
+            }
+        });
+    } catch (error) {
+        console.error('Error in movePastDayTasksForward:', error);
+        // Don't throw - just log the error so the app continues to work
+    }
 }
 
 // Move task to bucket
@@ -517,6 +654,12 @@ function loadTasks(data) {
             }
             return task;
         });
+        
+        // Move tasks from past day buckets to the next weekday
+        // Only call if we have tasks to avoid issues
+        if (tasks.length > 0) {
+            movePastDayTasksForward();
+        }
     } else {
         tasks = [];
     }

@@ -482,14 +482,15 @@ body::before {
     min-height: 300px;
 }
 
+/* Media queries - but inline styles from JS will override these */
 @media (max-width: 1200px) {
-    .day-buckets-container {
+    .day-buckets-container:not([style*="grid-template-columns"]) {
         grid-template-columns: repeat(3, 1fr);
     }
 }
 
 @media (max-width: 768px) {
-    .day-buckets-container {
+    .day-buckets-container:not([style*="grid-template-columns"]) {
         grid-template-columns: 1fr;
     }
 }

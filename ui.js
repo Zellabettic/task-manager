@@ -5,32 +5,173 @@ let dragStartPosition = null; // Store initial drag position
 
 // Render day buckets with dates
 function renderDayBuckets() {
-    const dayBuckets = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'];
-    const searchTerm = document.getElementById('searchInput')?.value.toLowerCase() || '';
-    const tasksToRender = searchTerm ? filterTasksBySearch(searchTerm) : getAllTasks();
+    // Note: movePastDayTasksForward() is called in loadTasks() and saveAndRender()
+    // to avoid calling it multiple times during rendering
     
-    dayBuckets.forEach(dayName => {
+    // Get the current day of week (0 = Sunday, 1 = Monday, etc.)
+    const today = new Date();
+    const currentDay = today.getDay(); // 0 = Sunday, 1 = Monday, etc.
+    
+    // Map current day to day bucket index (Monday=0, Tuesday=1, etc.)
+    // Convert Sunday (0) to 7 for easier calculation
+    const dayIndex = currentDay === 0 ? 7 : currentDay;
+    const dayBucketIndex = dayIndex - 1; // Monday = 0, Tuesday = 1, etc.
+    
+    // Reorder day buckets so current day is first
+    // Hide buckets for days that have passed (only show remaining days in current week)
+    const dayBuckets = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'];
+    let orderedDayBuckets;
+    
+    if (currentDay === 6) {
+        // It's Saturday - show all 5 buckets for next week
+        orderedDayBuckets = dayBuckets;
+    } else if (currentDay === 0) {
+        // It's Sunday - show all 5 buckets for next week
+        orderedDayBuckets = dayBuckets;
+    } else if (dayBucketIndex >= 0 && dayBucketIndex < 5) {
+        // Current day is a weekday - only show remaining days (today and future days this week)
+        // Hide buckets for days that have passed
+        orderedDayBuckets = dayBuckets.slice(dayBucketIndex);
+    } else {
+        // Fallback - show all buckets
+        orderedDayBuckets = dayBuckets;
+    }
+    
+    const searchTerm = document.getElementById('searchInput')?.value.toLowerCase() || '';
+    let tasksToRender = [];
+    try {
+        if (typeof getAllTasks === 'function') {
+            tasksToRender = searchTerm ? filterTasksBySearch(searchTerm) : getAllTasks();
+        } else {
+            console.error('getAllTasks function not available');
+            tasksToRender = [];
+        }
+    } catch (error) {
+        console.error('Error getting tasks:', error);
+        tasksToRender = [];
+    }
+    
+    // Reorder the DOM elements to match the new order
+    // Only reorder if the container exists and we're not in the middle of a search
+    try {
+        const dayBucketsContainer = document.querySelector('.day-buckets-container');
+        if (dayBucketsContainer && !searchTerm) {
+            // Store current order to avoid unnecessary reordering
+            const currentOrder = Array.from(dayBucketsContainer.children)
+                .map(el => el.getAttribute('data-bucket'))
+                .filter(b => b); // Filter out null values
+            
+            // Only reorder if the order is actually different
+            const needsReorder = currentOrder.length === orderedDayBuckets.length &&
+                !currentOrder.every((bucket, index) => bucket === orderedDayBuckets[index]);
+            
+            if (needsReorder) {
+                orderedDayBuckets.forEach(dayName => {
+                    const bucketElement = document.querySelector(`[data-bucket="${dayName}"]`);
+                    if (bucketElement && bucketElement.parentNode === dayBucketsContainer) {
+                        dayBucketsContainer.appendChild(bucketElement);
+                    }
+                });
+            }
+        }
+    } catch (error) {
+        console.error('Error reordering day buckets:', error);
+        // Continue with rendering even if reordering fails
+    }
+    
+    // Hide buckets for days that have passed (during the work week)
+    // Show all buckets on Saturday/Sunday
+    // Also update grid columns to fill horizontal space
+    const dayBucketsContainer = document.querySelector('.day-buckets-container');
+    let visibleBucketCount = 0;
+    
+    if (currentDay !== 0 && currentDay !== 6) {
+        // It's a weekday - hide buckets for days that have passed
+        dayBuckets.forEach(dayName => {
+            const dayIndex = dayBuckets.indexOf(dayName);
+            const dayBucketIndexForDay = dayIndex; // Monday=0, Tuesday=1, etc.
+            
+            if (dayBucketIndexForDay < dayBucketIndex) {
+                // This day has passed - hide the bucket
+                const dayBucketContainer = document.querySelector(`[data-bucket="${dayName}"]`);
+                if (dayBucketContainer) {
+                    dayBucketContainer.style.display = 'none';
+                }
+            } else {
+                // This day is today or in the future - show the bucket
+                const dayBucketContainer = document.querySelector(`[data-bucket="${dayName}"]`);
+                if (dayBucketContainer) {
+                    dayBucketContainer.style.display = 'flex';
+                    visibleBucketCount++;
+                }
+            }
+        });
+    } else {
+        // It's Saturday or Sunday - show all buckets
+        visibleBucketCount = 5;
+        dayBuckets.forEach(dayName => {
+            const dayBucketContainer = document.querySelector(`[data-bucket="${dayName}"]`);
+            if (dayBucketContainer) {
+                dayBucketContainer.style.display = 'flex';
+            }
+        });
+    }
+    
+    // Update grid columns to match visible bucket count so they fill the horizontal space
+    // But respect responsive breakpoints for very small screens
+    if (dayBucketsContainer && visibleBucketCount > 0) {
+        const screenWidth = window.innerWidth;
+        if (screenWidth <= 768) {
+            // On mobile, always use 1 column
+            dayBucketsContainer.style.gridTemplateColumns = '1fr';
+        } else if (screenWidth <= 1200 && visibleBucketCount > 3) {
+            // On medium screens, limit to 3 columns max
+            dayBucketsContainer.style.gridTemplateColumns = `repeat(${Math.min(visibleBucketCount, 3)}, 1fr)`;
+        } else {
+            // On larger screens, use all visible buckets
+            dayBucketsContainer.style.gridTemplateColumns = `repeat(${visibleBucketCount}, 1fr)`;
+        }
+    }
+    
+    // Render in the new order
+    orderedDayBuckets.forEach(dayName => {
         const bucketElement = document.getElementById(`bucket-${dayName}`);
         const titleElement = document.getElementById(`${dayName}-title`);
         if (!bucketElement || !titleElement) return;
         
         // Get date for this day (using task-manager function)
-        let dayDate = null;
-        if (typeof getDateForDay === 'function') {
-            dayDate = getDateForDay(dayName);
-        }
-        if (dayDate) {
-            // Parse YYYY-MM-DD format
-            const dateParts = dayDate.split('-');
-            if (dateParts.length === 3) {
-                const year = parseInt(dateParts[0]);
-                const month = parseInt(dateParts[1]) - 1;
-                const day = parseInt(dateParts[2]);
-                const date = new Date(year, month, day);
-                const dateStr = formatDate(date);
-                titleElement.textContent = `${dayName.charAt(0).toUpperCase() + dayName.slice(1)}, ${dateStr}`;
+        try {
+            let dayDate = null;
+            // getDateForDay should be available from task-manager.js
+            if (typeof getDateForDay === 'function') {
+                dayDate = getDateForDay(dayName);
+            } else {
+                console.warn('getDateForDay function not found for', dayName);
             }
-        } else {
+            if (dayDate) {
+                // Parse YYYY-MM-DD format
+                const dateParts = dayDate.split('-');
+                if (dateParts.length === 3) {
+                    const year = parseInt(dateParts[0]);
+                    const month = parseInt(dateParts[1]) - 1;
+                    const day = parseInt(dateParts[2]);
+                    const date = new Date(year, month, day);
+                    if (!isNaN(date.getTime())) {
+                        // Format as "Tuesday, November 18" (day name already included, so just month and day)
+                        const monthName = date.toLocaleDateString('en-US', { month: 'long' });
+                        const dayNum = date.getDate();
+                        titleElement.textContent = `${dayName.charAt(0).toUpperCase() + dayName.slice(1)}, ${monthName} ${dayNum}`;
+                    } else {
+                        titleElement.textContent = dayName.charAt(0).toUpperCase() + dayName.slice(1);
+                    }
+                } else {
+                    titleElement.textContent = dayName.charAt(0).toUpperCase() + dayName.slice(1);
+                }
+            } else {
+                titleElement.textContent = dayName.charAt(0).toUpperCase() + dayName.slice(1);
+            }
+        } catch (error) {
+            console.error('Error rendering date for', dayName, error);
             titleElement.textContent = dayName.charAt(0).toUpperCase() + dayName.slice(1);
         }
         
@@ -937,6 +1078,11 @@ function closeTaskModal() {
 
 // Save and render
 async function saveAndRender() {
+    // Move tasks from past day buckets to the next weekday before saving
+    if (typeof movePastDayTasksForward === 'function' && typeof tasks !== 'undefined' && tasks.length > 0) {
+        movePastDayTasksForward();
+    }
+    
     const data = getTasksData();
     
     // Only save to localStorage if signed in
@@ -971,6 +1117,19 @@ function debouncedSync() {
             console.error('Auto-sync failed:', error);
         }
     }, 2000);
+}
+
+// Get ordinal suffix for day (1st, 2nd, 3rd, 4th, etc.)
+function getOrdinalSuffix(day) {
+    if (day >= 11 && day <= 13) {
+        return 'th';
+    }
+    switch (day % 10) {
+        case 1: return 'st';
+        case 2: return 'nd';
+        case 3: return 'rd';
+        default: return 'th';
+    }
 }
 
 // Format date (date should already be a Date object, not a string)
