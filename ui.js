@@ -399,10 +399,10 @@ function renderBuckets() {
             });
         }
         
-        // Update count
+        // Update count and get total count for collapse logic
         const countElement = document.getElementById(`count-${bucket}`);
+        let totalCount = 0;
         if (countElement) {
-            let totalCount;
             if (bucket === 'completed') {
                 totalCount = getAllTasks().filter(t => t.completed === true).length;
             } else {
@@ -416,13 +416,34 @@ function renderBuckets() {
             countElement.textContent = totalCount;
         }
         
-        
-        
         // Render tasks
         if (bucketTasks.length === 0) {
             bucketElement.innerHTML = '';
+            
+            // Auto-collapse empty buckets (but not during search, and not for completed bucket)
+            // Use totalCount to check if bucket is truly empty (not just filtered out)
+            if (!searchTerm && bucket !== 'completed' && bucketContainer && totalCount === 0) {
+                bucketElement.style.display = 'none';
+                bucketContainer.classList.add('bucket-collapsed');
+                // Update toggle button if it exists
+                const toggle = document.getElementById(`${bucket}-toggle`);
+                if (toggle) {
+                    toggle.textContent = '▼';
+                }
+            }
         } else {
             bucketElement.innerHTML = bucketTasks.map(task => createTaskCard(task)).join('');
+            
+            // Expand bucket if it has tasks
+            if (bucketContainer && !searchTerm) {
+                bucketElement.style.display = 'flex';
+                bucketContainer.classList.remove('bucket-collapsed');
+                // Update toggle button if it exists
+                const toggle = document.getElementById(`${bucket}-toggle`);
+                if (toggle) {
+                    toggle.textContent = '▲';
+                }
+            }
             
             // Attach event listeners
             bucketTasks.forEach(task => {
@@ -1486,8 +1507,8 @@ function initializeUI() {
             if (!bucket) return;
             
             const bucketTasks = bucket.querySelector('.bucket-tasks');
-            if (bucketTasks && bucketTasks.style.display === 'none') {
-                // Bucket is minimized, highlight the header
+            // Highlight header if bucket is collapsed (whether it's empty or manually collapsed)
+            if (bucketTasks && (bucketTasks.style.display === 'none' || bucket.classList.contains('bucket-collapsed'))) {
                 header.classList.add('drag-over');
             }
         });
@@ -1511,38 +1532,83 @@ function initializeUI() {
             const bucketId = bucket.getAttribute('data-bucket');
             const bucketTasks = bucket.querySelector('.bucket-tasks');
             
-            // Bottom row buckets (next-month, recurring, someday) - allow drop without expanding
-            const bottomRowBuckets = ['next-month', 'recurring', 'someday'];
-            if (bottomRowBuckets.includes(bucketId) && bucketTasks && bucketTasks.style.display === 'none') {
-                // Don't expand, just handle the drop directly
-                handleDrop({
-                    ...e,
-                    currentTarget: bucketTasks,
-                    preventDefault: () => {},
-                    stopPropagation: () => {}
-                });
-            } else if (bucketTasks) {
-                // Top row buckets or already expanded - expand first if needed
+            if (bucketTasks && draggedTaskId) {
+                // Preserve the taskId in case it gets cleared
+                const taskIdToMove = draggedTaskId;
+                
+                // All buckets can accept drops on their headers when collapsed
+                // If collapsed, expand it first, then handle the drop
                 if (bucketTasks.style.display === 'none') {
+                    // Expand the bucket first
+                    bucketTasks.style.display = 'flex';
+                    const bucketContainer = bucket;
+                    if (bucketContainer) {
+                        bucketContainer.classList.remove('bucket-collapsed');
+                    }
+                    // Update toggle button if it exists
                     const toggle = document.getElementById(`${bucketId}-toggle`);
-                    if (toggle) toggle.click();
+                    if (toggle) {
+                        toggle.textContent = '▲';
+                    }
                     // Wait a bit for the bucket to expand, then handle the drop
+                    // Create a proper event-like object with all necessary properties
                     setTimeout(() => {
-                        handleDrop({
-                            ...e,
-                            currentTarget: bucketTasks,
-                            preventDefault: () => {},
-                            stopPropagation: () => {}
-                        });
-                    }, 50);
+                        try {
+                            // Restore draggedTaskId if it was cleared
+                            if (!draggedTaskId) {
+                                draggedTaskId = taskIdToMove;
+                            }
+                            
+                            // Ensure bucketTasks is still valid
+                            const targetBucketTasks = bucket.querySelector('.bucket-tasks');
+                            if (!targetBucketTasks) {
+                                console.error('Bucket tasks element not found after expansion');
+                                // Fallback: directly move the task
+                                moveTaskToBucket(taskIdToMove, bucketId);
+                                saveAndRender();
+                                return;
+                            }
+                            
+                            const dropEvent = {
+                                preventDefault: () => {},
+                                stopPropagation: () => {},
+                                currentTarget: targetBucketTasks,
+                                clientX: e.clientX,
+                                clientY: e.clientY
+                            };
+                            handleDrop(dropEvent);
+                        } catch (error) {
+                            console.error('Error handling drop on collapsed bucket header:', error);
+                            // Fallback: directly move the task to the bucket
+                            try {
+                                moveTaskToBucket(taskIdToMove, bucketId);
+                                saveAndRender();
+                            } catch (moveError) {
+                                console.error('Error moving task to bucket:', moveError);
+                            }
+                        }
+                    }, 150); // Increased timeout to ensure bucket is fully expanded and rendered
                 } else {
                     // Bucket is already expanded, handle drop normally
-                    handleDrop({
-                        ...e,
-                        currentTarget: bucketTasks,
-                        preventDefault: () => {},
-                        stopPropagation: () => {}
-                    });
+                    try {
+                        const dropEvent = {
+                            preventDefault: () => {},
+                            stopPropagation: () => {},
+                            currentTarget: bucketTasks,
+                            clientX: e.clientX,
+                            clientY: e.clientY
+                        };
+                        handleDrop(dropEvent);
+                    } catch (error) {
+                        console.error('Error handling drop on expanded bucket header:', error);
+                        // Fallback: directly move the task to the bucket
+                        try {
+                            moveTaskToBucket(taskIdToMove, bucketId);
+                            saveAndRender();
+                        } catch (moveError) {
+                            console.error('Error moving task to bucket:', moveError);
+                        }
+                    }
                 }
             }
         });
