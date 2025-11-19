@@ -760,45 +760,63 @@ function attachTaskEventListeners(taskId) {
         card = allCards[0];
     }
     
-    if (!card) return;
+    if (!card) {
+        console.warn(`Task card not found for task ${taskId}`);
+        return;
+    }
 
-    card.querySelector('.flag-task')?.addEventListener('click', (e) => {
-        e.stopPropagation();
-        toggleTaskFlag(taskId);
-        saveAndRender();
-    });
+    // Flag button clicks are now handled by event delegation in initializeUI()
+    // No need to attach individual listeners here
 
-    card.querySelector('.complete-task')?.addEventListener('click', (e) => {
-        e.stopPropagation();
-        toggleTaskCompletion(taskId);
-        saveAndRender();
-    });
+    const completeButton = card.querySelector('.complete-task');
+    if (completeButton) {
+        completeButton.addEventListener('click', (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            try {
+                toggleTaskCompletion(taskId);
+                saveAndRender();
+            } catch (error) {
+                console.error('Error toggling task completion:', error);
+                alert('Failed to toggle completion. Please try again.');
+            }
+        });
+    }
 
-    card.querySelector('.pomodoro-start-task')?.addEventListener('click', (e) => {
-        e.stopPropagation();
-        showPomodoroTimer(taskId);
-    });
+    const pomodoroButton = card.querySelector('.pomodoro-start-task');
+    if (pomodoroButton) {
+        pomodoroButton.addEventListener('click', (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            showPomodoroTimer(taskId);
+        });
+    }
     
     // Make due date clickable to edit just the due date
     const dueDateElement = card.querySelector('.due-date');
     if (dueDateElement) {
         dueDateElement.addEventListener('click', (e) => {
             e.stopPropagation();
+            e.preventDefault();
             editTaskDueDate(taskId, dueDateElement);
         });
     }
     
     // Make entire task card clickable to edit (but not if we just dragged)
-    card.addEventListener('click', (e) => {
-        // Don't trigger if clicking on action buttons, due date, or if we just dragged
-        if (hasDragged) return;
-        if (e.target.closest('.task-actions')) return;
-        if (e.target.closest('.due-date')) return;
-        if (e.target.closest('.task-tags')) return;
-        
-        // Open edit modal
-        openTaskModal(taskId);
-    });
+    // Only attach if not already attached (check for a marker)
+    if (!card.dataset.cardClickAttached) {
+        card.dataset.cardClickAttached = 'true';
+        card.addEventListener('click', (e) => {
+            // Don't trigger if clicking on action buttons, due date, or if we just dragged
+            if (hasDragged) return;
+            if (e.target.closest('.task-actions')) return;
+            if (e.target.closest('.due-date')) return;
+            if (e.target.closest('.task-tags')) return;
+            
+            // Open edit modal
+            openTaskModal(taskId);
+        });
+    }
 }
 
 // Drag and Drop handlers
@@ -1375,6 +1393,25 @@ function showConfirmDialog(title, message) {
 
 // Initialize UI event listeners
 function initializeUI() {
+    // Event delegation for flag button clicks - this ensures it works even after DOM changes
+    document.addEventListener('click', (e) => {
+        const flagButton = e.target.closest('.flag-task');
+        if (flagButton) {
+            e.stopPropagation();
+            e.preventDefault();
+            const taskId = flagButton.getAttribute('data-id') || flagButton.closest('[data-task-id]')?.getAttribute('data-task-id');
+            if (taskId) {
+                try {
+                    toggleTaskFlag(taskId);
+                    saveAndRender();
+                } catch (error) {
+                    console.error('Error toggling task flag:', error);
+                    alert('Failed to toggle flag. Please try again.');
+                }
+            }
+        }
+    });
+    
     // Add task button
     document.getElementById('addTaskBtn').addEventListener('click', () => {
         // Explicitly set to 'this-week' when clicking Add Task button

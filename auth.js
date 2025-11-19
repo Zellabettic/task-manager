@@ -20,7 +20,7 @@ const msalConfig = {
         redirectUri: getRedirectUri()
     },
     cache: {
-        cacheLocation: 'sessionStorage',
+        cacheLocation: 'localStorage', // Use localStorage instead of sessionStorage to persist across hard refreshes
         storeAuthStateInCookie: false
     }
 };
@@ -61,33 +61,86 @@ function createMsalInstance() {
     return msalInstance;
 }
 
+// Track initialization state
+let authInitialized = false;
+let authInitPromise = null;
+
 // Initialize MSAL
 async function initializeAuth() {
-    // Wait for MSAL library to be available
-    if (typeof msal === 'undefined') {
-        console.error('MSAL library not loaded. Check the script tag in index.html');
-        alert('Error: MSAL authentication library failed to load. Please check your internet connection and refresh the page.');
-        return;
+    // If already initializing, return the existing promise
+    if (authInitPromise) {
+        return authInitPromise;
     }
     
-    // Create instance if not already created
-    if (!msalInstance) {
-        msalInstance = createMsalInstance();
+    // If already initialized, return immediately
+    if (authInitialized && msalInstance) {
+        return Promise.resolve();
+    }
+    
+    authInitPromise = (async () => {
+        // Wait for MSAL library to be available (with timeout)
+        if (typeof msal === 'undefined' || !msal.PublicClientApplication) {
+            console.log('MSAL library not loaded yet, waiting...');
+            // Wait up to 10 seconds for MSAL to load
+            const maxWaitTime = 10000; // 10 seconds
+            const checkInterval = 100; // Check every 100ms
+            const startTime = Date.now();
+            
+            while (typeof msal === 'undefined' || !msal.PublicClientApplication) {
+                if (Date.now() - startTime > maxWaitTime) {
+                    console.error('MSAL library failed to load after 10 seconds');
+                    alert('Error: MSAL authentication library failed to load. Please check your internet connection and refresh the page.');
+                    authInitPromise = null;
+                    return;
+                }
+                // Wait a bit before checking again
+                await new Promise(resolve => setTimeout(resolve, checkInterval));
+            }
+            console.log('MSAL library is now available');
+        }
+        
+        // Create instance if not already created
         if (!msalInstance) {
-            return;
+            msalInstance = createMsalInstance();
+            if (!msalInstance) {
+                authInitPromise = null;
+                return;
+            }
         }
-    }
+        
+        try {
+            await msalInstance.initialize();
+            
+            // Handle any pending redirect promises (e.g., after hard refresh)
+            try {
+                const redirectResponse = await msalInstance.handleRedirectPromise();
+                if (redirectResponse && redirectResponse.account) {
+                    currentAccount = redirectResponse.account;
+                    updateUIForSignedIn();
+                    authInitialized = true;
+                    authInitPromise = null;
+                    return;
+                }
+            } catch (redirectError) {
+                // No pending redirect or redirect failed - continue with normal initialization
+                console.log('No pending redirect or redirect error:', redirectError);
+            }
+            
+            // Check for existing accounts in cache
+            const accounts = msalInstance.getAllAccounts();
+            if (accounts.length > 0) {
+                currentAccount = accounts[0];
+                updateUIForSignedIn();
+            }
+            authInitialized = true;
+        } catch (error) {
+            console.error('Auth initialization error:', error);
+        } finally {
+            authInitPromise = null;
+        }
+    })();
     
-    try {
-        await msalInstance.initialize();
-        const accounts = msalInstance.getAllAccounts();
-        if (accounts.length > 0) {
-            currentAccount = accounts[0];
-            updateUIForSignedIn();
-        }
-    } catch (error) {
-        console.error('Auth initialization error:', error);
-    }
+    return authInitPromise;
 }
 
 // Sign in
@@ -287,29 +340,38 @@ function updateUIForSignedOut() {
 
 // Check if user is signed in
 function isSignedIn() {
-    return currentAccount !== null;
+    // First check if we have a cached account
+    if (currentAccount !== null) {
+        return true;
+    }
+    
+    // If MSAL is initialized, check its account cache directly
+    // This handles cases where sessionStorage was cleared but MSAL still has the account
+    if (msalInstance) {
+        try {
+            const accounts = msalInstance.getAllAccounts();
+            if (accounts.length > 0) {
+                currentAccount = accounts[0];
+                return true;
+            }
+        } catch (error) {
+            console.error('Error checking MSAL accounts:', error);
+        }
+    }
+    
+    return false;
 }
 
 // Wait for MSAL library to load, then initialize
+// Note: This is called early, but initializeAuth() will also be called from app.js
+// initializeAuth() now handles waiting for MSAL, so this is mainly for early initialization
 function waitForMsalAndInit() {
-    if (typeof msal !== 'undefined' && msal.PublicClientApplication) {
-        initializeAuth();
-    } else {
-        // Check every 100ms until MSAL is loaded (max 5 seconds)
-        let attempts = 0;
-        const maxAttempts = 50;
-        const checkInterval = setInterval(() => {
-            attempts++;
-            if (typeof msal !== 'undefined' && msal.PublicClientApplication) {
-                clearInterval(checkInterval);
-                initializeAuth();
-            } else if (attempts >= maxAttempts) {
-                clearInterval(checkInterval);
-                console.error('MSAL library failed to load after 5 seconds');
-                alert('MSAL authentication library failed to load. Please check your internet connection and refresh the page.');
-            }
-        }, 100);
-    }
+    // Just call initializeAuth - it will wait for MSAL if needed
+    // The authInitPromise mechanism ensures it only initializes once
+    initializeAuth().catch(error => {
+        // Error handling is done inside initializeAuth()
+        console.error('Error in waitForMsalAndInit:', error);
+    });
 }
 
 // Initialize on load - wait for DOM and MSAL library

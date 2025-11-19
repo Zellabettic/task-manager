@@ -3,7 +3,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Initialize UI
     initializeUI();
 
-    // Check sign-in status first
+    // Wait for MSAL to initialize before checking sign-in status
+    // This ensures we can properly detect if user is signed in even after hard refresh
+    if (typeof initializeAuth === 'function') {
+        try {
+            await initializeAuth();
+        } catch (error) {
+            console.error('Error initializing auth:', error);
+        }
+    }
+
+    // Check sign-in status after MSAL is initialized
     const signedIn = isSignedIn();
     
     if (!signedIn) {

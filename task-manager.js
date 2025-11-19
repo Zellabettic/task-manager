@@ -58,7 +58,7 @@ function addTask(taskData) {
         dueDate: taskData.dueDate || null,
         bucket: taskData.bucket || (taskData.dueDate ? determineBucketFromDate(taskData.dueDate) : 'this-week'),
         order: taskData.order || Date.now(), // For drag and drop ordering
-        tags: taskData.tags ? taskData.tags.split(',').map(t => t.trim()).filter(t => t) : [],
+        tags: taskData.tags ? (Array.isArray(taskData.tags) ? taskData.tags : taskData.tags.split(',').map(t => t.trim()).filter(t => t)) : [],
         recurring: taskData.recurring || { enabled: false },
         flagged: taskData.flagged !== undefined ? taskData.flagged : false,
         completed: taskData.completed || false,
@@ -103,7 +103,7 @@ function updateTask(id, taskData) {
         dueDate: taskData.dueDate || null,
         bucket: bucket,
         order: taskData.order || existingTask.order || Date.now(),
-        tags: taskData.tags ? taskData.tags.split(',').map(t => t.trim()).filter(t => t) : [],
+        tags: taskData.tags ? (Array.isArray(taskData.tags) ? taskData.tags : taskData.tags.split(',').map(t => t.trim()).filter(t => t)) : [],
         flagged: taskData.flagged !== undefined ? taskData.flagged : (existingTask.flagged || false),
         completed: taskData.completed !== undefined ? taskData.completed : existingTask.completed || false,
         completedAt: taskData.completedAt !== undefined ? taskData.completedAt : existingTask.completedAt || null,
@@ -390,25 +390,61 @@ function toggleTaskCompletion(taskId) {
         throw new Error('Task not found');
     }
     
+    // Check if this is a recurring task BEFORE marking as completed
+    // This ensures we have the correct recurring state before the task is modified
+    const isRecurring = task.recurring && task.recurring.enabled;
+    const wasCompleted = task.completed;
+    
+    // Save original task data BEFORE modifying it (needed for creating new recurring instance)
+    const originalTaskData = {
+        title: task.title,
+        description: task.description || '',
+        dueDate: task.dueDate,
+        tags: task.tags && Array.isArray(task.tags) ? [...task.tags] : [],
+        recurring: task.recurring ? { ...task.recurring } : { enabled: false }
+    };
+    
     task.completed = !task.completed;
     if (task.completed) {
         task.completedAt = new Date().toISOString();
-        task.bucket = 'completed';
+        
+        // If this is a recurring task being completed, create a new instance
+        if (isRecurring && !wasCompleted) {
+            try {
+                console.log('Creating next instance of recurring task:', task.title);
+                // Use original task data to create the new instance
+                const newTask = createNextRecurringTask(originalTaskData);
+                if (newTask) {
+                    console.log('New recurring task created:', newTask.id, 'due:', newTask.dueDate, 'bucket:', newTask.bucket);
+                } else {
+                    console.error('Failed to create next recurring task - createNextRecurringTask returned null');
+                }
+            } catch (error) {
+                // Don't let recurring task creation errors break the completion toggle
+                console.error('Error creating next recurring task:', error);
+                // Task is still marked as completed, just the new instance creation failed
+            }
+        }
+        
+        // For recurring tasks, keep them in the recurring bucket even when completed
+        // For non-recurring tasks, move to completed bucket
+        if (!isRecurring) {
+            task.bucket = 'completed';
+        }
+        // If recurring, keep it in recurring bucket (don't move to completed)
     } else {
         task.completedAt = null;
         // Restore to original bucket based on due date, or default to this-week
-        if (task.dueDate) {
+        // But if it's recurring, keep it in recurring bucket
+        if (isRecurring) {
+            task.bucket = 'recurring';
+        } else if (task.dueDate) {
             task.bucket = determineBucketFromDate(task.dueDate);
         } else {
             task.bucket = 'this-week';
         }
     }
     task.updatedAt = new Date().toISOString();
-    
-    // If this is a recurring task being completed, create a new instance
-    if (task.completed && task.recurring && task.recurring.enabled) {
-        createNextRecurringTask(task);
-    }
     
     return task;
 }
@@ -419,18 +455,28 @@ function calculateNextRecurringDate(task) {
         return null;
     }
     
-    const baseDate = task.dueDate ? new Date(task.dueDate) : new Date();
-    // Parse the date string to avoid timezone issues
+    // Use today's date as the base for calculating the next occurrence
+    // This ensures that if a task is completed late, the next occurrence
+    // is calculated from today, not from the past due date
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    // If the task has a due date, use the later of today or the due date
+    let baseDate = today;
     if (task.dueDate) {
         const dateParts = task.dueDate.split('-');
         if (dateParts.length === 3) {
-            baseDate.setFullYear(parseInt(dateParts[0]));
-            baseDate.setMonth(parseInt(dateParts[1]) - 1);
-            baseDate.setDate(parseInt(dateParts[2]));
-            baseDate.setHours(0, 0, 0, 0);
+            const dueDate = new Date(
+                parseInt(dateParts[0]),
+                parseInt(dateParts[1]) - 1,
+                parseInt(dateParts[2])
+            );
+            dueDate.setHours(0, 0, 0, 0);
+            // Use the later date (today or due date) to avoid going backwards
+            if (dueDate > today) {
+                baseDate = dueDate;
+            }
         }
-    } else {
-        baseDate.setHours(0, 0, 0, 0);
     }
     
     const nextDate = new Date(baseDate);
@@ -476,13 +522,17 @@ function createNextRecurringTask(completedTask) {
     }
     
     const nextDueDate = calculateNextRecurringDate(completedTask);
+    if (!nextDueDate) {
+        console.error('Failed to calculate next due date for recurring task');
+        return null;
+    }
     
     const newTask = {
         title: completedTask.title,
         description: completedTask.description || '',
         dueDate: nextDueDate,
         bucket: 'recurring', // Recurring tasks always go to recurring bucket
-        tags: [...completedTask.tags], // Copy tags
+        tags: completedTask.tags && Array.isArray(completedTask.tags) ? [...completedTask.tags] : [],
         recurring: {
             enabled: true,
             type: completedTask.recurring.type || 'daily',
@@ -490,7 +540,11 @@ function createNextRecurringTask(completedTask) {
         }
     };
     
-    return addTask(newTask);
+    console.log('Creating new recurring task:', newTask.title, 'due:', newTask.dueDate);
+    const createdTask = addTask(newTask);
+    console.log('New recurring task created with ID:', createdTask.id);
+    
+    return createdTask;
 }
 
 // Get completed tasks
