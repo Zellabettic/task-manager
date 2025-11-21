@@ -8,13 +8,26 @@ function renderDayBuckets() {
     // Note: movePastDayTasksForward() is called in loadTasks() and saveAndRender()
     // to avoid calling it multiple times during rendering
     
-    // Get the current day of week (0 = Sunday, 1 = Monday, etc.)
-    const today = new Date();
-    const currentDay = today.getDay(); // 0 = Sunday, 1 = Monday, etc.
+    // Get the current date/time and check if it's after 7pm
+    // If after 7pm, treat it as the next day for bucket visibility
+    const now = new Date();
+    const currentHour = now.getHours();
+    const isAfter7PM = currentHour >= 19; // 7pm = 19:00
     
-    // Map current day to day bucket index (Monday=0, Tuesday=1, etc.)
+    // Get the effective day (if after 7pm, use next day)
+    let effectiveDay = now.getDay(); // 0 = Sunday, 1 = Monday, etc.
+    if (isAfter7PM && effectiveDay >= 1 && effectiveDay <= 5) {
+        // After 7pm on a weekday, treat as next day
+        effectiveDay = effectiveDay + 1;
+        if (effectiveDay === 6) {
+            // Friday after 7pm = Saturday, show all next week
+            effectiveDay = 0; // Treat as Sunday for display purposes
+        }
+    }
+    
+    // Map effective day to day bucket index (Monday=0, Tuesday=1, etc.)
     // Convert Sunday (0) to 7 for easier calculation
-    const dayIndex = currentDay === 0 ? 7 : currentDay;
+    const dayIndex = effectiveDay === 0 ? 7 : effectiveDay;
     const dayBucketIndex = dayIndex - 1; // Monday = 0, Tuesday = 1, etc.
     
     // Reorder day buckets so current day is first
@@ -22,11 +35,8 @@ function renderDayBuckets() {
     const dayBuckets = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'];
     let orderedDayBuckets;
     
-    if (currentDay === 6) {
-        // It's Saturday - show all 5 buckets for next week
-        orderedDayBuckets = dayBuckets;
-    } else if (currentDay === 0) {
-        // It's Sunday - show all 5 buckets for next week
+    if (effectiveDay === 6 || effectiveDay === 0) {
+        // It's Saturday or Sunday (or Friday after 7pm) - show all 5 buckets for next week
         orderedDayBuckets = dayBuckets;
     } else if (dayBucketIndex >= 0 && dayBucketIndex < 5) {
         // Current day is a weekday - only show remaining days (today and future days this week)
@@ -85,14 +95,14 @@ function renderDayBuckets() {
     const dayBucketsContainer = document.querySelector('.day-buckets-container');
     let visibleBucketCount = 0;
     
-    if (currentDay !== 0 && currentDay !== 6) {
-        // It's a weekday - hide buckets for days that have passed
+    if (effectiveDay !== 0 && effectiveDay !== 6) {
+        // It's a weekday - hide buckets for days that have passed (using 7pm cutoff)
         dayBuckets.forEach(dayName => {
             const dayIndex = dayBuckets.indexOf(dayName);
             const dayBucketIndexForDay = dayIndex; // Monday=0, Tuesday=1, etc.
             
             if (dayBucketIndexForDay < dayBucketIndex) {
-                // This day has passed - hide the bucket
+                // This day has passed (after 7pm cutoff) - hide the bucket
                 const dayBucketContainer = document.querySelector(`[data-bucket="${dayName}"]`);
                 if (dayBucketContainer) {
                     dayBucketContainer.style.display = 'none';
@@ -107,7 +117,7 @@ function renderDayBuckets() {
             }
         });
     } else {
-        // It's Saturday or Sunday - show all buckets
+        // It's Saturday or Sunday (or Friday after 7pm) - show all buckets
         visibleBucketCount = 5;
         dayBuckets.forEach(dayName => {
             const dayBucketContainer = document.querySelector(`[data-bucket="${dayName}"]`);
@@ -471,11 +481,50 @@ function renderBuckets() {
                     if (bucketSelect) {
                         bucketSelect.value = bucket;
                     }
+                    // If recurring bucket, check the recurring checkbox
+                    if (bucket === 'recurring') {
+                        const recurringCheckbox = document.getElementById('taskRecurring');
+                        if (recurringCheckbox) {
+                            recurringCheckbox.checked = true;
+                            // Mark to preserve recurring checkbox in openTaskModal
+                            recurringCheckbox.setAttribute('data-preserve-recurring', 'true');
+                            // Trigger change event to show recurring options
+                            recurringCheckbox.dispatchEvent(new Event('change'));
+                        }
+                    }
                     openTaskModal();
                 });
             }
         }
     });
+    
+    // Make flagged header clickable to add flagged task
+    const flaggedHeader = document.querySelector('.flagged-header');
+    if (flaggedHeader) {
+        flaggedHeader.style.cursor = 'pointer';
+        // Only add listener once to avoid duplicates
+        if (!flaggedHeader.dataset.addTaskListener) {
+            flaggedHeader.dataset.addTaskListener = 'true';
+            flaggedHeader.addEventListener('click', (e) => {
+                // Don't trigger if clicking on the count
+                if (e.target.closest('.flagged-count')) return;
+                if (hasDragged) return;
+                e.stopPropagation();
+                // Pre-select flag checkbox and set bucket to this-week
+                const flagCheckbox = document.getElementById('taskFlagged');
+                if (flagCheckbox) {
+                    flagCheckbox.checked = true;
+                    // Mark to preserve flag checkbox in openTaskModal
+                    flagCheckbox.setAttribute('data-preserve-flag', 'true');
+                }
+                const bucketSelect = document.getElementById('taskBucket');
+                if (bucketSelect) {
+                    bucketSelect.value = 'this-week';
+                }
+                openTaskModal();
+            });
+        }
+    }
     
     // If searching, scroll to first matching task
     if (searchTerm) {
@@ -723,7 +772,6 @@ function createTaskCard(task) {
                 <div class="task-title">${escapeHtml(task.title).replace(/\n/g, '<br>')}</div>
                 <div class="task-actions">
                     <button class="flag-task ${task.flagged ? 'flagged' : ''}" data-id="${task.id}" title="${task.flagged ? 'Unflag' : 'Flag'}">🚩</button>
-                    <button class="pomodoro-start-task" data-id="${task.id}" title="Start Pomodoro">🍅</button>
                     <button class="complete-task ${task.completed ? 'completed' : ''}" data-id="${task.id}" title="${task.completed ? 'Mark as incomplete' : 'Mark as complete'}"></button>
                 </div>
             </div>
@@ -780,15 +828,6 @@ function attachTaskEventListeners(taskId) {
                 console.error('Error toggling task completion:', error);
                 alert('Failed to toggle completion. Please try again.');
             }
-        });
-    }
-
-    const pomodoroButton = card.querySelector('.pomodoro-start-task');
-    if (pomodoroButton) {
-        pomodoroButton.addEventListener('click', (e) => {
-            e.stopPropagation();
-            e.preventDefault();
-            showPomodoroTimer(taskId);
         });
     }
     
@@ -1083,6 +1122,12 @@ function openTaskModal(taskId = null) {
         const bucketSelect = document.getElementById('taskBucket');
         const preservedBucket = bucketSelect ? bucketSelect.value : null;
         
+        // Preserve flag and recurring checkbox states before reset
+        const flagCheckbox = document.getElementById('taskFlagged');
+        const recurringCheckbox = document.getElementById('taskRecurring');
+        const preserveFlag = flagCheckbox && (flagCheckbox.checked || flagCheckbox.hasAttribute('data-preserve-flag'));
+        const preserveRecurring = recurringCheckbox && (recurringCheckbox.checked || recurringCheckbox.hasAttribute('data-preserve-recurring'));
+        
         form.reset();
         document.getElementById('taskId').value = '';
         
@@ -1091,8 +1136,34 @@ function openTaskModal(taskId = null) {
             bucketSelect.value = preservedBucket || 'this-week';
         }
         
-        document.getElementById('taskFlagged').checked = false;
-        document.getElementById('recurringOptions').style.display = 'none';
+        // Restore checkboxes based on bucket or preserved state
+        // If recurring bucket or preserved, check recurring checkbox
+        const shouldBeRecurring = (bucketSelect && bucketSelect.value === 'recurring') || preserveRecurring;
+        if (shouldBeRecurring && recurringCheckbox) {
+            recurringCheckbox.checked = true;
+            document.getElementById('recurringOptions').style.display = 'block';
+            // Trigger change event to ensure options are shown
+            recurringCheckbox.dispatchEvent(new Event('change'));
+            if (recurringCheckbox.hasAttribute('data-preserve-recurring')) {
+                recurringCheckbox.removeAttribute('data-preserve-recurring');
+            }
+        } else {
+            if (recurringCheckbox) {
+                recurringCheckbox.checked = false;
+                document.getElementById('recurringOptions').style.display = 'none';
+            }
+        }
+        
+        // Restore flag checkbox if it was preserved
+        if (preserveFlag && flagCheckbox) {
+            flagCheckbox.checked = true;
+            if (flagCheckbox.hasAttribute('data-preserve-flag')) {
+                flagCheckbox.removeAttribute('data-preserve-flag');
+            }
+        } else if (flagCheckbox) {
+            flagCheckbox.checked = false;
+        }
+        
         deleteBtn.style.display = 'none';
     }
     
@@ -1832,6 +1903,19 @@ function initializeUI() {
             if (bucketSelect) {
                 bucketSelect.value = bucketId;
             }
+            
+            // If recurring bucket, check the recurring checkbox
+            if (bucketId === 'recurring') {
+                const recurringCheckbox = document.getElementById('taskRecurring');
+                if (recurringCheckbox) {
+                    recurringCheckbox.checked = true;
+                    // Mark to preserve recurring checkbox in openTaskModal
+                    recurringCheckbox.setAttribute('data-preserve-recurring', 'true');
+                    // Trigger change event to show recurring options
+                    recurringCheckbox.dispatchEvent(new Event('change'));
+                }
+            }
+            
             openTaskModal();
         });
         
@@ -1898,6 +1982,8 @@ function initializeUI() {
             const flagCheckbox = document.getElementById('taskFlagged');
             if (flagCheckbox) {
                 flagCheckbox.checked = true;
+                // Mark to preserve flag checkbox in openTaskModal
+                flagCheckbox.setAttribute('data-preserve-flag', 'true');
             }
             // Default bucket to 'this-week' when adding from flagged section
             const bucketSelect = document.getElementById('taskBucket');
@@ -1999,6 +2085,8 @@ function initializeUI() {
     const taskManagerTitle = document.getElementById('taskManagerTitle');
     if (taskManagerTitle) {
         taskManagerTitle.addEventListener('click', () => {
+            // Scroll to top of page
+            window.scrollTo({ top: 0, behavior: 'smooth' });
             showMainView();
         });
     }
