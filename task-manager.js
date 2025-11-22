@@ -75,6 +75,9 @@ function addTask(taskData) {
             type: taskData.recurring.type || 'daily',
             interval: parseInt(taskData.recurring.interval) || 1
         };
+    } else {
+        // Normalize: non-recurring tasks should only have enabled: false
+        task.recurring = { enabled: false };
     }
 
     tasks.push(task);
@@ -89,7 +92,8 @@ function updateTask(id, taskData) {
     }
 
     const existingTask = tasks[taskIndex];
-    let bucket = taskData.bucket || existingTask.bucket;
+    // Only update bucket if explicitly provided and not empty string
+    let bucket = taskData.bucket !== undefined && taskData.bucket !== '' ? taskData.bucket : existingTask.bucket;
     
     // If recurring is enabled, force bucket to recurring
     if (taskData.recurring && taskData.recurring.enabled) {
@@ -98,29 +102,45 @@ function updateTask(id, taskData) {
     
     const updatedTask = {
         ...existingTask,
-        title: taskData.title,
-        description: taskData.description || '',
-        dueDate: taskData.dueDate || null,
+        // Only update fields that are explicitly provided
+        title: taskData.title !== undefined ? taskData.title : existingTask.title,
+        description: taskData.description !== undefined ? taskData.description : existingTask.description || '',
+        dueDate: taskData.dueDate !== undefined ? taskData.dueDate : existingTask.dueDate,
         bucket: bucket,
-        order: taskData.order || existingTask.order || Date.now(),
-        tags: taskData.tags ? (Array.isArray(taskData.tags) ? taskData.tags : taskData.tags.split(',').map(t => t.trim()).filter(t => t)) : [],
+        order: taskData.order !== undefined ? taskData.order : (existingTask.order || Date.now()),
+        tags: taskData.tags !== undefined ? (Array.isArray(taskData.tags) ? taskData.tags : taskData.tags.split(',').map(t => t.trim()).filter(t => t)) : existingTask.tags || [],
         flagged: taskData.flagged !== undefined ? taskData.flagged : (existingTask.flagged || false),
         completed: taskData.completed !== undefined ? taskData.completed : existingTask.completed || false,
         completedAt: taskData.completedAt !== undefined ? taskData.completedAt : existingTask.completedAt || null,
         updatedAt: new Date().toISOString()
     };
 
-    if (taskData.recurring && taskData.recurring.enabled) {
-        updatedTask.recurring = {
-            enabled: true,
-            type: taskData.recurring.type || 'daily',
-            interval: parseInt(taskData.recurring.interval) || 1
-        };
+    // Only update recurring if explicitly provided
+    if (taskData.recurring !== undefined) {
+        if (taskData.recurring && taskData.recurring.enabled) {
+            updatedTask.recurring = {
+                enabled: true,
+                type: taskData.recurring.type || 'daily',
+                interval: parseInt(taskData.recurring.interval) || 1
+            };
+        } else {
+            updatedTask.recurring = { enabled: false };
+            // If no longer recurring and no bucket specified, determine from date
+            if (taskData.bucket === undefined && updatedTask.dueDate) {
+                updatedTask.bucket = determineBucketFromDate(updatedTask.dueDate);
+            }
+        }
     } else {
-        updatedTask.recurring = { enabled: false };
-        // If no longer recurring and no bucket specified, determine from date
-        if (!taskData.bucket && updatedTask.dueDate) {
-            updatedTask.bucket = determineBucketFromDate(updatedTask.dueDate);
+        // Preserve existing recurring settings, but normalize if not enabled
+        if (existingTask.recurring && existingTask.recurring.enabled) {
+            updatedTask.recurring = {
+                enabled: true,
+                type: existingTask.recurring.type || 'daily',
+                interval: parseInt(existingTask.recurring.interval) || 1
+            };
+        } else {
+            // Normalize: non-recurring tasks should only have enabled: false
+            updatedTask.recurring = { enabled: false };
         }
     }
 
@@ -129,11 +149,19 @@ function updateTask(id, taskData) {
 }
 
 // Get date for a day of the week (Monday = 1, Tuesday = 2, etc.)
-// Only shows current week's dates until Saturday, then shows next week
+// Uses 7pm as the cutoff - after 7pm, treats it as the next day
 function getDateForDay(dayName) {
     try {
-        const today = new Date();
+        // Use 7pm as the cutoff - if it's after 7pm, treat as next day
+        const now = new Date();
+        const cutoffTime = new Date(now);
+        cutoffTime.setHours(19, 0, 0, 0); // 7pm
+        
+        // If current time is after 7pm, use tomorrow as the reference date
+        const referenceDate = now >= cutoffTime ? new Date(now.getTime() + 24 * 60 * 60 * 1000) : now;
+        const today = new Date(referenceDate);
         today.setHours(0, 0, 0, 0);
+        
         const dayMap = {
             'monday': 1,
             'tuesday': 2,
@@ -150,7 +178,7 @@ function getDateForDay(dayName) {
         let daysUntilTarget;
         
         if (currentDay === 6) {
-            // It's Saturday - show next week's dates for all days
+            // It's Saturday (or Friday after 7pm) - show next week's dates for all days
             // Next Monday is 2 days away, next Tuesday is 3, etc.
             daysUntilTarget = targetDay + 1;
         } else if (currentDay === 0) {
@@ -189,7 +217,11 @@ function getDateForDay(dayName) {
     } catch (error) {
         console.error('Error in getDateForDay:', error, dayName);
         // Fallback to original simple logic if there's an error
-        const today = new Date();
+        const now = new Date();
+        const cutoffTime = new Date(now);
+        cutoffTime.setHours(19, 0, 0, 0);
+        const referenceDate = now >= cutoffTime ? new Date(now.getTime() + 24 * 60 * 60 * 1000) : now;
+        const today = new Date(referenceDate);
         today.setHours(0, 0, 0, 0);
         const dayMap = {
             'monday': 1,
@@ -232,8 +264,21 @@ function getNextWeekdayBucket(currentBucket) {
 function movePastDayTasksForward() {
     try {
         const dayBuckets = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'];
-        const today = new Date();
+        // Use 7pm as the cutoff - if it's after 7pm, treat as next day
+        const now = new Date();
+        const cutoffTime = new Date(now);
+        cutoffTime.setHours(19, 0, 0, 0); // 7pm
+        
+        // If current time is after 7pm, use tomorrow as the reference date
+        const referenceDate = now >= cutoffTime ? new Date(now.getTime() + 24 * 60 * 60 * 1000) : now;
+        const today = new Date(referenceDate);
         today.setHours(0, 0, 0, 0);
+        
+        // Determine if we're showing next week's buckets
+        // This happens on Friday after 7pm, Saturday, or Sunday
+        const currentDay = now.getDay(); // 0 = Sunday, 1 = Monday, etc.
+        const isAfter7PM = now >= cutoffTime;
+        const isShowingNextWeek = (isAfter7PM && currentDay === 5) || currentDay === 6 || currentDay === 0;
         
         // Safety check - make sure tasks array exists
         if (!tasks || !Array.isArray(tasks)) {
@@ -247,6 +292,65 @@ function movePastDayTasksForward() {
             try {
                 // Only process tasks in day buckets that are not completed or flagged
                 if (!task || !task.bucket || !dayBuckets.includes(task.bucket) || task.completed || task.flagged) {
+                    return false;
+                }
+                
+                // Don't move tasks that were just updated (within last 2 seconds)
+                // This prevents moving tasks that were just dropped into a bucket
+                if (task.updatedAt) {
+                    const updatedTime = new Date(task.updatedAt).getTime();
+                    const nowTime = now.getTime();
+                    const timeSinceUpdate = nowTime - updatedTime;
+                    // If updated within last 2 seconds, don't move it
+                    if (timeSinceUpdate < 2000) {
+                        return false;
+                    }
+                }
+                
+                // Special case: If we're showing next week's buckets (Friday after 7pm, Saturday, or Sunday)
+                // and tasks are in the Friday bucket, check if they should be moved to Monday
+                // Only move if the Friday date is actually from last week (before Monday's date)
+                if (isShowingNextWeek && task.bucket === 'friday') {
+                    // Get the dates for Friday and Monday to compare
+                    if (typeof getDateForDay === 'function') {
+                        const fridayDateStr = getDateForDay('friday');
+                        const mondayDateStr = getDateForDay('monday');
+                        
+                        if (fridayDateStr && mondayDateStr) {
+                            // Parse dates
+                            const fridayParts = fridayDateStr.split('-');
+                            const mondayParts = mondayDateStr.split('-');
+                            
+                            if (fridayParts.length === 3 && mondayParts.length === 3) {
+                                const fridayDate = new Date(
+                                    parseInt(fridayParts[0]),
+                                    parseInt(fridayParts[1]) - 1,
+                                    parseInt(fridayParts[2])
+                                );
+                                const mondayDate = new Date(
+                                    parseInt(mondayParts[0]),
+                                    parseInt(mondayParts[1]) - 1,
+                                    parseInt(mondayParts[2])
+                                );
+                                
+                                fridayDate.setHours(0, 0, 0, 0);
+                                mondayDate.setHours(0, 0, 0, 0);
+                                
+                                // Only move if Friday's date is BEFORE Monday's date (meaning it's from last week)
+                                // Never move if Friday's date is after Monday's (which would be wrong)
+                                if (fridayDate < mondayDate) {
+                                    return true;
+                                }
+                                // If Friday date >= Monday date, don't move (it's already in the correct week)
+                                return false;
+                            }
+                        }
+                    }
+                    // If we can't get dates, fall back to the old behavior but be more conservative
+                    // Only move if we're on Saturday or Sunday (not Friday after 7pm, as that's the transition)
+                    if (currentDay === 6 || currentDay === 0) {
+                        return true;
+                    }
                     return false;
                 }
                 
@@ -288,6 +392,44 @@ function movePastDayTasksForward() {
             try {
                 const nextBucket = getNextWeekdayBucket(task.bucket);
                 if (nextBucket) {
+                    // For Friday->Monday moves, double-check the dates to prevent wrong moves
+                    if (task.bucket === 'friday' && nextBucket === 'monday') {
+                        if (typeof getDateForDay === 'function') {
+                            const fridayDateStr = getDateForDay('friday');
+                            const mondayDateStr = getDateForDay('monday');
+                            
+                            if (fridayDateStr && mondayDateStr) {
+                                const fridayParts = fridayDateStr.split('-');
+                                const mondayParts = mondayDateStr.split('-');
+                                
+                                if (fridayParts.length === 3 && mondayParts.length === 3) {
+                                    const fridayDate = new Date(
+                                        parseInt(fridayParts[0]),
+                                        parseInt(fridayParts[1]) - 1,
+                                        parseInt(fridayParts[2])
+                                    );
+                                    const mondayDate = new Date(
+                                        parseInt(mondayParts[0]),
+                                        parseInt(mondayParts[1]) - 1,
+                                        parseInt(mondayParts[2])
+                                    );
+                                    
+                                    fridayDate.setHours(0, 0, 0, 0);
+                                    mondayDate.setHours(0, 0, 0, 0);
+                                    
+                                    // Never move if Friday date >= Monday date (would be wrong)
+                                    if (fridayDate >= mondayDate) {
+                                        console.log('Skipping move: Friday date is not before Monday date', {
+                                            friday: fridayDateStr,
+                                            monday: mondayDateStr
+                                        });
+                                        return; // Skip this move
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
                     task.bucket = nextBucket;
                     // Keep the original due date - don't change it
                     task.updatedAt = new Date().toISOString();
@@ -311,14 +453,8 @@ function moveTaskToBucket(taskId, newBucket) {
     
     task.bucket = newBucket;
     
-    // If moving to a day bucket, set the due date to that day
-    const dayBuckets = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'];
-    if (dayBuckets.includes(newBucket)) {
-        const dayDate = getDateForDay(newBucket);
-        if (dayDate) {
-            task.dueDate = dayDate;
-        }
-    }
+    // Do NOT change the due date when moving between buckets
+    // The due date should remain unchanged - only the bucket changes
     
     task.updatedAt = new Date().toISOString();
     return task;
@@ -671,7 +807,32 @@ function deleteTask(id) {
 // Load tasks from data structure (with migration from project to bucket)
 function loadTasks(data) {
     if (data && data.tasks) {
-        tasks = data.tasks.map((task, index) => {
+        // Filter out invalid tasks (missing ID or title) but log them for debugging
+        const invalidTasks = [];
+        const validTasks = data.tasks.filter((task, index) => {
+            if (!task || !task.id) {
+                invalidTasks.push({ index, reason: 'Missing ID', task });
+                return false;
+            }
+            if (!task.title || task.title.trim() === '') {
+                invalidTasks.push({ index, reason: 'Missing or empty title', task });
+                return false;
+            }
+            return true;
+        });
+        
+        if (invalidTasks.length > 0) {
+            console.warn(`Skipping ${invalidTasks.length} invalid task(s) during load:`, invalidTasks);
+        }
+        
+        tasks = validTasks.map((task, index) => {
+            // Ensure title exists and is not empty
+            if (!task.title || task.title.trim() === '') {
+                console.error('Task missing title after validation:', task);
+                // Use a placeholder to prevent data loss
+                task.title = task.title || `Untitled Task ${task.id}`;
+            }
+            
             // Migrate old tasks: if they have project but no bucket, determine bucket from date
             if (!task.bucket) {
                 if (task.project) {
@@ -706,8 +867,28 @@ function loadTasks(data) {
             if (task.completed && task.bucket !== 'completed') {
                 task.bucket = 'completed';
             }
+            
+            // Normalize recurring field: if not enabled, only keep enabled: false
+            if (task.recurring) {
+                if (task.recurring.enabled) {
+                    // Ensure type and interval are present for enabled recurring tasks
+                    task.recurring = {
+                        enabled: true,
+                        type: task.recurring.type || 'daily',
+                        interval: parseInt(task.recurring.interval) || 1
+                    };
+                } else {
+                    // Normalize: non-recurring tasks should only have enabled: false
+                    task.recurring = { enabled: false };
+                }
+            } else {
+                task.recurring = { enabled: false };
+            }
+            
             return task;
         });
+        
+        console.log(`Loaded ${tasks.length} valid task(s) from ${data.tasks.length} total task(s)`);
         
         // Move tasks from past day buckets to the next weekday
         // Only call if we have tasks to avoid issues
@@ -716,6 +897,7 @@ function loadTasks(data) {
         }
     } else {
         tasks = [];
+        console.log('No task data found or data.tasks is missing');
     }
 }
 

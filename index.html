@@ -3,10 +3,22 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>Task Manager</title>
     <link rel="icon" type="image/svg+xml" href="./favicon.svg?v=1">
     <link rel="shortcut icon" type="image/svg+xml" href="./favicon.svg?v=1">
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles.css" id="stylesLink">
+    <script>
+        // Add cache-busting to CSS on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            const stylesLink = document.getElementById('stylesLink');
+            if (stylesLink) {
+                stylesLink.href = 'styles.css?v=' + Date.now();
+            }
+        });
+    </script>
     <script>
         // Load MSAL library with fallback
         function loadMsalLibrary() {
@@ -81,7 +93,10 @@
         <!-- Header -->
         <header class="header">
             <div class="header-inner">
-                <h1 id="taskManagerTitle" style="cursor: pointer; user-select: none;">Task Manager</h1>
+                <div style="display: flex; align-items: center; gap: 1rem;">
+                    <h1 id="taskManagerTitle" style="cursor: pointer; user-select: none; margin: 0;">Task Manager</h1>
+                    <span id="totalTaskCount" class="total-task-count" style="display: none;">0 tasks</span>
+                </div>
                 <div class="header-controls">
                     <button id="addTaskBtn" class="btn btn-primary">
                         <span class="icon">+</span> Add Task
@@ -290,6 +305,72 @@
                     <div class="bucket-tasks" id="completedTasksGrid"></div>
                 </div>
             </div>
+
+            <!-- Filtered Bucket View (hidden by default) -->
+            <div id="filteredBucketView" class="filtered-bucket-view" style="display: none;">
+                <div class="filtered-bucket-view-header">
+                    <button id="backToMainFromFilteredBtn" class="btn btn-secondary">← Back</button>
+                </div>
+                <div class="bucket filtered-bucket" data-bucket="">
+                    <div class="bucket-header" id="filtered-bucket-header">
+                        <h2 id="filtered-bucket-title">Bucket Tasks</h2>
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <span class="bucket-count" id="count-filtered-bucket">0</span>
+                        </div>
+                    </div>
+                    <div class="bucket-tasks filtered-bucket-tasks" id="filteredBucketTasksGrid"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bulk Edit Modal -->
+    <div id="bulkEditModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="bulkEditModalTitle">Bulk Edit Tasks</h2>
+                <button class="modal-close" id="closeBulkEditModal">&times;</button>
+            </div>
+            <form id="bulkEditForm">
+                <div class="form-group">
+                    <label for="bulkEditBucket">When</label>
+                    <select id="bulkEditBucket">
+                        <optgroup label="This Week">
+                            <option value="">-- Keep Current --</option>
+                            <option value="monday">Monday</option>
+                            <option value="tuesday">Tuesday</option>
+                            <option value="wednesday">Wednesday</option>
+                            <option value="thursday">Thursday</option>
+                            <option value="friday">Friday</option>
+                        </optgroup>
+                        <optgroup label="Time Periods">
+                            <option value="this-week">This Week</option>
+                            <option value="next-week">Next Week</option>
+                            <option value="this-month">This Month</option>
+                            <option value="next-month">Next Month</option>
+                            <option value="recurring">Recurring</option>
+                            <option value="someday">Someday</option>
+                        </optgroup>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="bulkEditDueDate">Due Date</label>
+                    <input type="text" id="bulkEditDueDate" placeholder="e.g., 01/15/24, jan 15, january 15 2024, tomorrow, or next week">
+                    <small class="form-hint">Enter a date in mm/dd/yy format, month name (jan, january), or natural language. Leave empty to keep current dates.</small>
+                </div>
+
+                <div class="form-group">
+                    <label for="bulkEditTags">Tags (comma-separated)</label>
+                    <input type="text" id="bulkEditTags" placeholder="work, urgent, personal">
+                    <small class="form-hint">Enter tags to add to all selected tasks. Leave empty to keep current tags.</small>
+                </div>
+
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" id="cancelBulkEditBtn">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Update Selected Tasks</button>
+                </div>
+            </form>
         </div>
     </div>
 
@@ -411,11 +492,17 @@
     </div>
 
 
-    <script src="auth.js"></script>
-    <script src="task-manager.js"></script>
-    <script src="onedrive.js"></script>
-    <script src="ui.js"></script>
-    <script src="app.js"></script>
+    <!-- Cache-busting: Scripts load with timestamp to prevent caching -->
+    <!-- Using document.write to ensure scripts load synchronously before DOMContentLoaded -->
+    <script>
+        (function() {
+            const cacheBuster = '?v=' + Date.now();
+            const scripts = ['auth.js', 'task-manager.js', 'onedrive.js', 'ui.js', 'app.js'];
+            scripts.forEach(src => {
+                document.write('<script src="' + src + cacheBuster + '"><\/script>');
+            });
+        })();
+    </script>
 </body>
 </html>
 

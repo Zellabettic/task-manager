@@ -85,9 +85,41 @@ async function readTasksFile() {
         }
 
         const text = await response.text();
-        return JSON.parse(text);
+        if (!text || text.trim() === '') {
+            console.warn('Tasks file is empty');
+            return {
+                version: '1.0',
+                lastSync: new Date().toISOString(),
+                tasks: []
+            };
+        }
+        
+        const data = JSON.parse(text);
+        
+        // Validate data structure
+        if (!data || typeof data !== 'object') {
+            console.error('Invalid tasks file format: not an object');
+            throw new Error('Invalid tasks file format');
+        }
+        
+        if (!data.tasks || !Array.isArray(data.tasks)) {
+            console.warn('Tasks file missing tasks array, creating empty array');
+            data.tasks = [];
+        }
+        
+        console.log(`Read ${data.tasks.length} task(s) from OneDrive`);
+        return data;
     } catch (error) {
         console.error('Error reading tasks file:', error);
+        // If it's a JSON parse error, return empty structure instead of throwing
+        if (error instanceof SyntaxError) {
+            console.error('JSON parse error - file may be corrupted');
+            return {
+                version: '1.0',
+                lastSync: new Date().toISOString(),
+                tasks: []
+            };
+        }
         throw error;
     }
 }
@@ -214,15 +246,34 @@ async function syncWithOneDrive() {
         // Get local data
         const localData = getLocalTasks();
         
-        // Merge strategy: prefer remote if it's newer, otherwise merge
+        // Merge strategy: prefer data with more tasks, or merge if both have tasks
         let mergedData;
-        if (!localData || localData.tasks.length === 0) {
+        if (!localData || !localData.tasks || localData.tasks.length === 0) {
+            // No local data, use remote
             mergedData = remoteData;
-        } else if (!remoteData || remoteData.tasks.length === 0) {
+            console.log('Using remote data (no local data)');
+        } else if (!remoteData || !remoteData.tasks || remoteData.tasks.length === 0) {
+            // No remote data, use local
             mergedData = localData;
+            console.log('Using local data (no remote data)');
         } else {
-            // Merge: combine unique tasks by ID, keep most recent version
-            mergedData = mergeTaskData(localData, remoteData);
+            // Both have data - prefer the one with more tasks, or merge if similar
+            const localCount = localData.tasks.length;
+            const remoteCount = remoteData.tasks.length;
+            
+            if (localCount > remoteCount * 1.5) {
+                // Local has significantly more tasks - prefer local
+                console.log(`Using local data (${localCount} tasks vs ${remoteCount} remote tasks)`);
+                mergedData = localData;
+            } else if (remoteCount > localCount * 1.5) {
+                // Remote has significantly more tasks - prefer remote
+                console.log(`Using remote data (${remoteCount} tasks vs ${localCount} local tasks)`);
+                mergedData = remoteData;
+            } else {
+                // Similar counts - merge and keep most recent versions
+                console.log(`Merging data (${localCount} local tasks, ${remoteCount} remote tasks)`);
+                mergedData = mergeTaskData(localData, remoteData);
+            }
         }
 
         // Save merged data locally and remotely

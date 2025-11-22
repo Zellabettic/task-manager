@@ -33,12 +33,18 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (data) {
                 loadTasks(data);
                 renderBuckets();
+                if (typeof updateTotalTaskCount === 'function') {
+                    updateTotalTaskCount();
+                }
             } else {
                 // Fallback to localStorage if sync fails
                 const localData = getLocalTasks();
                 if (localData) {
                     loadTasks(localData);
                     renderBuckets();
+                    if (typeof updateTotalTaskCount === 'function') {
+                        updateTotalTaskCount();
+                    }
                 }
             }
         } catch (error) {
@@ -48,6 +54,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (localData) {
                 loadTasks(localData);
                 renderBuckets();
+                if (typeof updateTotalTaskCount === 'function') {
+                    updateTotalTaskCount();
+                }
             }
         }
     }
@@ -79,6 +88,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             loadTasks(getLocalTasks());
             showMainContent();
             renderBuckets();
+            if (typeof updateTotalTaskCount === 'function') {
+                updateTotalTaskCount();
+            }
             console.log('Initial sync complete');
         } catch (error) {
             console.error('Sign in error:', error);

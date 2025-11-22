@@ -2,6 +2,7 @@
 let currentEditingTaskId = null;
 let draggedTaskId = null;
 let dragStartPosition = null; // Store initial drag position
+let selectedTasks = new Set(); // Track selected tasks for bulk editing
 
 // Render day buckets with dates
 function renderDayBuckets() {
@@ -244,9 +245,15 @@ function renderDayBuckets() {
                 }
                 bucketElement.innerHTML = bucketTasks.map(task => createTaskCard(task)).join('');
                 
-                // Attach event listeners
+                // Attach event listeners and restore selection
                 bucketTasks.forEach(task => {
                     attachTaskEventListeners(task.id);
+                    if (selectedTasks.has(task.id)) {
+                        const card = bucketElement.querySelector(`[data-task-id="${task.id}"]`);
+                        if (card) {
+                            card.classList.add('task-selected');
+                        }
+                    }
                 });
                 
                 // Optimize card sizing
@@ -264,9 +271,15 @@ function renderDayBuckets() {
             } else {
                 bucketElement.innerHTML = bucketTasks.map(task => createTaskCard(task)).join('');
                 
-                // Attach event listeners
+                // Attach event listeners and restore selection
                 bucketTasks.forEach(task => {
                     attachTaskEventListeners(task.id);
+                    if (selectedTasks.has(task.id)) {
+                        const card = bucketElement.querySelector(`[data-task-id="${task.id}"]`);
+                        if (card) {
+                            card.classList.add('task-selected');
+                        }
+                    }
                 });
                 
                 // Optimize card sizing
@@ -443,6 +456,16 @@ function renderBuckets() {
             }
         } else {
             bucketElement.innerHTML = bucketTasks.map(task => createTaskCard(task)).join('');
+            
+            // Restore selection state after rendering
+            bucketTasks.forEach(task => {
+                if (selectedTasks.has(task.id)) {
+                    const card = bucketElement.querySelector(`[data-task-id="${task.id}"]`);
+                    if (card) {
+                        card.classList.add('task-selected');
+                    }
+                }
+            });
             
             // Expand bucket if it has tasks
             if (bucketContainer && !searchTerm) {
@@ -847,10 +870,26 @@ function attachTaskEventListeners(taskId) {
         card.dataset.cardClickAttached = 'true';
         card.addEventListener('click', (e) => {
             // Don't trigger if clicking on action buttons, due date, or if we just dragged
-            if (hasDragged) return;
+            if (hasDragged || isDragging) return;
             if (e.target.closest('.task-actions')) return;
             if (e.target.closest('.due-date')) return;
             if (e.target.closest('.task-tags')) return;
+            
+            // Don't trigger if this was part of a drag operation
+            if (document.querySelector('.task-card.dragging')) return;
+            
+            // Check for Ctrl/Cmd key for multi-select
+            if (e.ctrlKey || e.metaKey) {
+                e.preventDefault();
+                e.stopPropagation();
+                toggleTaskSelection(taskId);
+                return;
+            }
+            
+            // If tasks are selected and clicking without Ctrl, clear selection first
+            if (selectedTasks.size > 0) {
+                clearTaskSelection();
+            }
             
             // Open edit modal
             openTaskModal(taskId);
@@ -858,16 +897,170 @@ function attachTaskEventListeners(taskId) {
     }
 }
 
+// Task selection functions
+function toggleTaskSelection(taskId) {
+    if (selectedTasks.has(taskId)) {
+        selectedTasks.delete(taskId);
+    } else {
+        selectedTasks.add(taskId);
+    }
+    updateTaskSelectionVisuals();
+    
+    // If we have selected tasks, show bulk edit button or open modal
+    if (selectedTasks.size > 0) {
+        // Show bulk edit option (we'll open modal when user clicks edit or right-clicks)
+        // For now, we'll open bulk edit modal when selection changes and there are multiple tasks
+        if (selectedTasks.size > 1) {
+            // Don't auto-open, let user trigger it
+        }
+    }
+}
+
+function clearTaskSelection() {
+    selectedTasks.clear();
+    updateTaskSelectionVisuals();
+}
+
+function updateTaskSelectionVisuals() {
+    // Update all task cards to show selection state
+    document.querySelectorAll('.task-card').forEach(card => {
+        const taskId = card.getAttribute('data-task-id');
+        if (taskId && selectedTasks.has(taskId)) {
+            card.classList.add('task-selected');
+        } else {
+            card.classList.remove('task-selected');
+        }
+    });
+    
+    // Show/hide bulk edit button or indicator
+    updateBulkEditIndicator();
+}
+
+function updateBulkEditIndicator() {
+    // Remove existing indicator if any
+    let indicator = document.getElementById('bulkEditIndicator');
+    if (selectedTasks.size === 0) {
+        if (indicator) {
+            indicator.remove();
+        }
+        return;
+    }
+    
+    // Create or update indicator
+    if (!indicator) {
+        indicator = document.createElement('div');
+        indicator.id = 'bulkEditIndicator';
+        indicator.className = 'bulk-edit-indicator';
+        document.body.appendChild(indicator);
+    }
+    
+    indicator.innerHTML = `
+        <div class="bulk-edit-content">
+            <span class="bulk-edit-count">${selectedTasks.size} task${selectedTasks.size > 1 ? 's' : ''} selected</span>
+            <button class="btn btn-primary" id="bulkEditBtn">Edit Selected</button>
+            <button class="btn btn-secondary" id="clearSelectionBtn">Clear</button>
+        </div>
+    `;
+    
+    // Attach event listeners
+    const bulkEditBtn = document.getElementById('bulkEditBtn');
+    const clearBtn = document.getElementById('clearSelectionBtn');
+    
+    if (bulkEditBtn) {
+        bulkEditBtn.addEventListener('click', () => {
+            openBulkEditModal();
+        });
+    }
+    
+    if (clearBtn) {
+        clearBtn.addEventListener('click', () => {
+            clearTaskSelection();
+        });
+    }
+}
+
 // Drag and Drop handlers
 let hasDragged = false; // Track if we just performed a drag operation
+let draggedTaskIds = []; // Track all tasks being dragged (for multi-select)
+let originalTaskPositions = []; // Store original positions to restore if drag is canceled
+let dropOccurred = false; // Track if a drop actually occurred
+let isDragging = false; // Track if we're currently in a drag operation
+let autoScrollInterval = null; // Track auto-scroll interval
 
 function handleDragStart(event, taskId) {
-    draggedTaskId = taskId;
-    draggedElement = event.currentTarget;
+    // Prevent default to ensure drag works properly
     event.dataTransfer.effectAllowed = 'move';
     event.dataTransfer.setData('text/html', taskId);
-    event.currentTarget.classList.add('dragging');
+    
+    draggedTaskId = taskId;
+    draggedElement = event.currentTarget;
     hasDragged = false; // Reset flag at start of drag
+    dropOccurred = false; // Reset drop flag
+    isDragging = true; // Mark that we're dragging
+    
+    // Check if this task is selected - if so, drag all selected tasks
+    if (selectedTasks.has(taskId) && selectedTasks.size > 1) {
+        draggedTaskIds = Array.from(selectedTasks);
+        // Add dragging class to all selected tasks
+        draggedTaskIds.forEach(id => {
+            const card = document.querySelector(`[data-task-id="${id}"]`);
+            if (card) {
+                card.classList.add('dragging', 'dragging-multi');
+            }
+        });
+        
+        // Try to create a custom drag image showing multiple cards
+        // Must be done synchronously during dragstart
+        try {
+            const dragImage = createMultiTaskDragImage(draggedTaskIds.length);
+            if (dragImage) {
+                event.dataTransfer.setDragImage(dragImage, 20, 20);
+            }
+        } catch (error) {
+            // If drag image creation fails, continue without it
+            console.warn('Could not create custom drag image, using default:', error);
+        }
+    } else {
+        // Single task drag
+        draggedTaskIds = [taskId];
+        event.currentTarget.classList.add('dragging');
+    }
+    
+    // Start auto-scroll detection after a small delay to ensure drag is established
+    setTimeout(() => {
+        if (isDragging) {
+            startAutoScroll();
+        }
+    }, 100);
+    
+    // Store original positions for all dragged tasks
+    originalTaskPositions = draggedTaskIds.map(id => {
+        const task = getTaskById(id);
+        if (!task) return null;
+        
+        // Get all tasks in the same bucket to determine position
+        const bucketTasks = getAllTasks().filter(t => 
+            t.bucket === task.bucket && 
+            !t.completed && 
+            !t.flagged
+        );
+        
+        // Sort by order to get current position
+        bucketTasks.sort((a, b) => {
+            const orderA = a.order || (a.createdAt ? new Date(a.createdAt).getTime() : 0);
+            const orderB = b.order || (b.createdAt ? new Date(b.createdAt).getTime() : 0);
+            return orderA - orderB;
+        });
+        
+        const position = bucketTasks.findIndex(t => t.id === id);
+        
+        return {
+            id: id,
+            bucket: task.bucket,
+            order: task.order || (task.createdAt ? new Date(task.createdAt).getTime() : 0),
+            position: position >= 0 ? position : bucketTasks.length
+        };
+    }).filter(pos => pos !== null);
     
     // Store initial drag position
     const rect = draggedElement.getBoundingClientRect();
@@ -879,8 +1072,240 @@ function handleDragStart(event, taskId) {
 
 let draggedElement = null;
 
+// Auto-scroll functionality during drag
+let currentScrollX = 0;
+let currentScrollY = 0;
+
+function startAutoScroll() {
+    // Clear any existing interval
+    stopAutoScroll();
+    
+    // Set up auto-scroll on dragover
+    const handleAutoScroll = (e) => {
+        if (!isDragging) {
+            stopAutoScroll();
+            return;
+        }
+        
+        const scrollThreshold = 80; // Distance from edge to trigger scroll
+        const viewportWidth = window.innerWidth;
+        const viewportHeight = window.innerHeight;
+        const mouseX = e.clientX;
+        const mouseY = e.clientY;
+        
+        // Calculate scroll speeds based on distance from edge (faster when closer)
+        let scrollX = 0;
+        let scrollY = 0;
+        
+        // Horizontal scrolling
+        if (mouseX < scrollThreshold) {
+            // Closer to edge = faster scroll
+            scrollX = -Math.max(5, (scrollThreshold - mouseX) / 5);
+        } else if (mouseX > viewportWidth - scrollThreshold) {
+            scrollX = Math.max(5, (mouseX - (viewportWidth - scrollThreshold)) / 5);
+        }
+        
+        // Vertical scrolling
+        if (mouseY < scrollThreshold) {
+            scrollY = -Math.max(5, (scrollThreshold - mouseY) / 5);
+        } else if (mouseY > viewportHeight - scrollThreshold) {
+            scrollY = Math.max(5, (mouseY - (viewportHeight - scrollThreshold)) / 5);
+        }
+        
+        // Update scroll speeds
+        currentScrollX = scrollX;
+        currentScrollY = scrollY;
+        
+        // Start or continue scrolling
+        if ((scrollX !== 0 || scrollY !== 0) && !autoScrollInterval) {
+            autoScrollInterval = setInterval(() => {
+                if (!isDragging) {
+                    stopAutoScroll();
+                    return;
+                }
+                
+                const currentX = window.scrollX || document.documentElement.scrollLeft;
+                const currentY = window.scrollY || document.documentElement.scrollTop;
+                
+                // Calculate max scroll
+                const maxScrollX = Math.max(0, document.documentElement.scrollWidth - window.innerWidth);
+                const maxScrollY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+                
+                let newX = currentX;
+                let newY = currentY;
+                
+                // Scroll horizontally
+                if (currentScrollX !== 0) {
+                    newX = Math.max(0, Math.min(maxScrollX, currentX + currentScrollX));
+                }
+                
+                // Scroll vertically
+                if (currentScrollY !== 0) {
+                    newY = Math.max(0, Math.min(maxScrollY, currentY + currentScrollY));
+                }
+                
+                // Apply scroll
+                if (newX !== currentX || newY !== currentY) {
+                    window.scrollTo({
+                        left: newX,
+                        top: newY,
+                        behavior: 'auto'
+                    });
+                }
+                
+                // Stop if we've reached edges and no more scrolling needed
+                if ((currentScrollX === 0 || (newX === 0 && currentScrollX < 0) || (newX >= maxScrollX && currentScrollX > 0)) &&
+                    (currentScrollY === 0 || (newY === 0 && currentScrollY < 0) || (newY >= maxScrollY && currentScrollY > 0))) {
+                    // Check if mouse is still near edge
+                    if (currentScrollX === 0 && currentScrollY === 0) {
+                        stopAutoScroll();
+                    }
+                }
+            }, 16); // ~60fps
+        } else if (scrollX === 0 && scrollY === 0) {
+            // Stop scrolling if mouse moved away from edges
+            stopAutoScroll();
+        }
+    };
+    
+    // Listen for dragover events on document for auto-scroll
+    // Use capture phase and don't prevent default to avoid interfering with drag
+    document.addEventListener('dragover', handleAutoScroll, { passive: true, capture: false });
+    
+    // Store handler for cleanup
+    document._autoScrollHandler = handleAutoScroll;
+}
+
+function stopAutoScroll() {
+    if (autoScrollInterval) {
+        clearInterval(autoScrollInterval);
+        autoScrollInterval = null;
+    }
+    
+    currentScrollX = 0;
+    currentScrollY = 0;
+    
+    // Remove event listener
+    if (document._autoScrollHandler) {
+        document.removeEventListener('dragover', document._autoScrollHandler);
+        document._autoScrollHandler = null;
+    }
+}
+
+// Create a custom drag image for multiple tasks
+function createMultiTaskDragImage(count) {
+    try {
+        const dragImage = document.createElement('div');
+        dragImage.style.position = 'absolute';
+        dragImage.style.top = '-1000px';
+        dragImage.style.left = '-1000px';
+        dragImage.style.width = '200px';
+        dragImage.style.height = '150px';
+        dragImage.style.background = 'white';
+        dragImage.style.border = '3px solid #6366f1';
+        dragImage.style.borderRadius = '12px';
+        dragImage.style.boxShadow = '0 8px 16px rgba(0, 0, 0, 0.2)';
+        dragImage.style.padding = '1rem';
+        dragImage.style.display = 'flex';
+        dragImage.style.flexDirection = 'column';
+        dragImage.style.alignItems = 'center';
+        dragImage.style.justifyContent = 'center';
+        dragImage.style.zIndex = '10000';
+        dragImage.style.pointerEvents = 'none';
+        dragImage.style.fontFamily = 'system-ui, -apple-system, sans-serif';
+        
+        // Add count badge
+        const countBadge = document.createElement('div');
+        countBadge.style.background = '#6366f1';
+        countBadge.style.color = 'white';
+        countBadge.style.borderRadius = '50%';
+        countBadge.style.width = '40px';
+        countBadge.style.height = '40px';
+        countBadge.style.display = 'flex';
+        countBadge.style.alignItems = 'center';
+        countBadge.style.justifyContent = 'center';
+        countBadge.style.fontWeight = 'bold';
+        countBadge.style.fontSize = '1.2rem';
+        countBadge.style.marginBottom = '0.5rem';
+        countBadge.textContent = count;
+        
+        // Add text
+        const text = document.createElement('div');
+        text.style.fontSize = '0.875rem';
+        text.style.color = '#1f2937';
+        text.style.fontWeight = '600';
+        text.textContent = count === 1 ? '1 task' : `${count} tasks`;
+        
+        dragImage.appendChild(countBadge);
+        dragImage.appendChild(text);
+        
+        document.body.appendChild(dragImage);
+        
+        // Remove it after a short delay (browser will copy it for the drag image)
+        setTimeout(() => {
+            if (dragImage.parentNode) {
+                dragImage.parentNode.removeChild(dragImage);
+            }
+        }, 0);
+        
+        return dragImage;
+    } catch (error) {
+        console.error('Error creating drag image:', error);
+        return null;
+    }
+}
+
 function handleDragEnd(event) {
-    event.currentTarget.classList.remove('dragging');
+    // Remove dragging class from all dragged tasks
+    draggedTaskIds.forEach(id => {
+        const card = document.querySelector(`[data-task-id="${id}"]`);
+        if (card) {
+            card.classList.remove('dragging', 'dragging-multi');
+        }
+    });
+    
+    // If no drop occurred, restore original positions
+    if (!dropOccurred && originalTaskPositions.length > 0) {
+        try {
+            // Restore original order for each task
+            originalTaskPositions.forEach(originalPos => {
+                const task = getTaskById(originalPos.id);
+                if (task && task.bucket === originalPos.bucket) {
+                    // Task is still in the same bucket, restore its order
+                    task.order = originalPos.order;
+                }
+            });
+            
+            // Reorder all tasks in their original buckets to restore positions
+            const bucketsToRestore = [...new Set(originalTaskPositions.map(pos => pos.bucket))];
+            bucketsToRestore.forEach(bucket => {
+                const tasksInBucket = getAllTasks().filter(t => 
+                    t.bucket === bucket && 
+                    !t.completed && 
+                    !t.flagged
+                );
+                
+                // Sort by original order
+                tasksInBucket.sort((a, b) => {
+                    const originalA = originalTaskPositions.find(pos => pos.id === a.id);
+                    const originalB = originalTaskPositions.find(pos => pos.id === b.id);
+                    const orderA = originalA ? originalA.order : (a.order || (a.createdAt ? new Date(a.createdAt).getTime() : 0));
+                    const orderB = originalB ? originalB.order : (b.order || (b.createdAt ? new Date(b.createdAt).getTime() : 0));
+                    return orderA - orderB;
+                });
+                
+                // Reassign orders sequentially
+                tasksInBucket.forEach((t, index) => {
+                    t.order = (index + 1) * 10000;
+                });
+            });
+            
+            saveAndRender();
+        } catch (error) {
+            console.error('Error restoring original positions:', error);
+        }
+    }
+    
     dragStartPosition = null; // Reset drag position
     // Remove drag-over class from all buckets, flagged section, and tasks
     document.querySelectorAll('.bucket-tasks').forEach(el => {
@@ -891,7 +1316,7 @@ function handleDragEnd(event) {
         flaggedTasksContainer.classList.remove('drag-over');
     }
     document.querySelectorAll('.task-card').forEach(el => {
-        el.classList.remove('drag-over-task');
+        el.classList.remove('drag-over-task', 'drag-over-before', 'drag-over-after', 'drag-over-left', 'drag-over-right');
     });
     
     // Set flag to indicate we just dragged (prevent click event)
@@ -903,14 +1328,24 @@ function handleDragEnd(event) {
     }, 100);
     
     draggedTaskId = null;
+    draggedTaskIds = [];
     draggedElement = null;
+    originalTaskPositions = [];
+    dropOccurred = false;
+    isDragging = false; // Mark that dragging is complete
+    
+    // Stop auto-scroll
+    stopAutoScroll();
 }
 
 function handleDrop(event) {
     event.preventDefault();
     event.stopPropagation();
     
-    if (!draggedTaskId) return;
+    if (!draggedTaskId || draggedTaskIds.length === 0) return;
+    
+    // Mark that a drop occurred
+    dropOccurred = true;
     
     // Mark that we've dragged (to prevent click event)
     hasDragged = true;
@@ -918,49 +1353,30 @@ function handleDrop(event) {
     const task = getTaskById(draggedTaskId);
     if (!task) return;
     
+    // Get all tasks being dragged
+    let tasksToMove = draggedTaskIds.map(id => getTaskById(id)).filter(t => t !== null && t !== undefined);
+    if (tasksToMove.length === 0) return;
+    
     // Check if dropping into flagged section
     const flaggedTasksContainer = document.getElementById('flaggedTasks');
     if (event.currentTarget === flaggedTasksContainer || flaggedTasksContainer?.contains(event.currentTarget)) {
-        // Dropping into flagged section - flag the task
-        if (!task.flagged) {
-            try {
-                toggleTaskFlag(draggedTaskId);
-                saveAndRender();
-            } catch (error) {
-                console.error('Error flagging task:', error);
-                alert('Failed to flag task');
-            }
-        } else {
-            // Already flagged, just reorder within flagged section
-            const mouseX = event.clientX;
-            let insertBeforeTaskId = null;
-            
-            const taskCards = Array.from(flaggedTasksContainer.querySelectorAll('.task-card'))
-                .filter(card => card.getAttribute('data-task-id') !== draggedTaskId);
-            
-            // Find which task we're dropping before based on X position (horizontal layout)
-            for (let i = 0; i < taskCards.length; i++) {
-                const card = taskCards[i];
-                const cardRect = card.getBoundingClientRect();
-                const cardCenterX = cardRect.left + (cardRect.width / 2);
-                
-                if (mouseX < cardCenterX) {
-                    insertBeforeTaskId = card.getAttribute('data-task-id');
-                    break;
+        // Dropping into flagged section - flag all tasks
+        try {
+            tasksToMove.forEach(t => {
+                if (!t.flagged) {
+                    toggleTaskFlag(t.id);
                 }
-            }
-            
-            // Reorder flagged tasks (we'll need a special function for this)
-            try {
-                reorderFlaggedTask(draggedTaskId, insertBeforeTaskId);
-                saveAndRender();
-            } catch (error) {
-                console.error('Error reordering flagged task:', error);
-            }
+            });
+            clearTaskSelection();
+            saveAndRender();
+        } catch (error) {
+            console.error('Error flagging tasks:', error);
+            alert('Failed to flag tasks');
         }
         
         flaggedTasksContainer?.classList.remove('drag-over');
         draggedTaskId = null;
+        draggedTaskIds = [];
         draggedElement = null;
         return;
     }
@@ -981,106 +1397,381 @@ function handleDrop(event) {
     const indicator = bucketTasksElement.querySelector('.drop-indicator');
     if (indicator) indicator.remove();
     
-    // If dropping into completed bucket, mark as completed
-    if (newBucket === 'completed' && !task.completed) {
-        try {
-            toggleTaskCompletion(draggedTaskId);
-            // Get fresh reference to task after completing
-            task = getTaskById(draggedTaskId);
-        } catch (error) {
-            console.error('Error completing task:', error);
-        }
+    // If dropping into completed bucket, mark all as completed
+    if (newBucket === 'completed') {
+        tasksToMove.forEach(t => {
+            if (!t.completed) {
+                try {
+                    toggleTaskCompletion(t.id);
+                } catch (error) {
+                    console.error(`Error completing task ${t.id}:`, error);
+                }
+            }
+        });
+        // Refresh task references after completing
+        tasksToMove = draggedTaskIds.map(id => getTaskById(id)).filter(t => t !== null && t !== undefined);
     }
     
-    // If task is flagged and being dropped into a bucket, unflag it first
-    const wasFlagged = task.flagged;
-    if (wasFlagged) {
-        try {
-            toggleTaskFlag(draggedTaskId);
-            // Get fresh reference to task after unflagging
-            task = getTaskById(draggedTaskId);
-        } catch (error) {
-            console.error('Error unflagging task:', error);
+    // If tasks are flagged and being dropped into a bucket, unflag them first
+    tasksToMove.forEach(t => {
+        if (t.flagged) {
+            try {
+                toggleTaskFlag(t.id);
+            } catch (error) {
+                console.error(`Error unflagging task ${t.id}:`, error);
+            }
         }
-    }
+    });
+    // Refresh task references after unflagging
+    tasksToMove = draggedTaskIds.map(id => getTaskById(id)).filter(t => t !== null && t !== undefined);
     
     // Find the drop position in the target bucket
     const mouseX = event.clientX;
     const mouseY = event.clientY;
     let insertBeforeTaskId = null;
-    let closestCard = null;
-    let closestDistance = Infinity;
     
-    // Get all task cards in the target bucket (excluding the dragged one)
+    // Get all task cards in the target bucket (excluding all dragged tasks)
     const taskCards = Array.from(bucketTasksElement.querySelectorAll('.task-card'))
-        .filter(card => card.getAttribute('data-task-id') !== draggedTaskId);
+        .filter(card => !draggedTaskIds.includes(card.getAttribute('data-task-id')));
     
-    // Find the closest task card to the drop position
-    for (let i = 0; i < taskCards.length; i++) {
-        const card = taskCards[i];
-        const cardRect = card.getBoundingClientRect();
-        const cardCenterX = cardRect.left + (cardRect.width / 2);
-        const cardCenterY = cardRect.top + (cardRect.height / 2);
-        
-        // Calculate distance from mouse to card center
-        const distanceX = mouseX - cardCenterX;
-        const distanceY = mouseY - cardCenterY;
-        const distance = Math.sqrt(distanceX * distanceX + distanceY * distanceY);
-        
-        if (distance < closestDistance) {
-            closestDistance = distance;
-            closestCard = {
-                id: card.getAttribute('data-task-id'),
-                centerX: cardCenterX,
-                centerY: cardCenterY,
-                rect: cardRect
-            };
-        }
-    }
+    // Get all cards with their positions for easier processing
+    const cardsWithPositions = taskCards.map(card => {
+        const rect = card.getBoundingClientRect();
+        return {
+            card: card,
+            id: card.getAttribute('data-task-id'),
+            rect: rect,
+            centerX: rect.left + (rect.width / 2),
+            centerY: rect.top + (rect.height / 2),
+            top: rect.top,
+            bottom: rect.bottom,
+            left: rect.left,
+            right: rect.right
+        };
+    });
     
-    // Determine insert position based on closest card
-    if (closestCard) {
-        // If mouse is above the card's vertical center, insert before
-        // If mouse is to the left of the card's horizontal center (and roughly same row), insert before
-        if (mouseY < closestCard.centerY || 
-            (Math.abs(mouseY - closestCard.centerY) < closestCard.rect.height / 2 && mouseX < closestCard.centerX)) {
-            insertBeforeTaskId = closestCard.id;
+    // Check if mouse is directly over a card
+    let cardUnderMouse = cardsWithPositions.find(c => 
+        mouseX >= c.left && mouseX <= c.right &&
+        mouseY >= c.top && mouseY <= c.bottom
+    );
+    
+    if (cardUnderMouse) {
+        // Dropping directly on a card - position relative to that card
+        if (mouseX < cardUnderMouse.centerX) {
+            // Left side - insert before
+            insertBeforeTaskId = cardUnderMouse.id;
         } else {
-            // Insert after the closest card - find the next card in the grid
-            const allCards = Array.from(bucketTasksElement.querySelectorAll('.task-card'));
-            const closestIndex = allCards.findIndex(card => card.getAttribute('data-task-id') === closestCard.id);
-            if (closestIndex >= 0 && closestIndex < allCards.length - 1) {
-                insertBeforeTaskId = allCards[closestIndex + 1].getAttribute('data-task-id');
+            // Right side - insert after (find next card in DOM order)
+            const allCards = Array.from(bucketTasksElement.querySelectorAll('.task-card'))
+                .filter(card => !draggedTaskIds.includes(card.getAttribute('data-task-id')));
+            const cardIndex = allCards.findIndex(card => card.getAttribute('data-task-id') === cardUnderMouse.id);
+            if (cardIndex >= 0 && cardIndex < allCards.length - 1) {
+                insertBeforeTaskId = allCards[cardIndex + 1].getAttribute('data-task-id');
             }
+        }
+    } else {
+        // Dropping in empty space - find which row we're in
+        // Group cards by row (cards with similar Y positions)
+        const rowTolerance = 50; // pixels
+        const rows = [];
+        
+        cardsWithPositions.forEach(card => {
+            // Find if this card belongs to an existing row
+            let foundRow = false;
+            for (let row of rows) {
+                // Check if card is in this row (similar Y position)
+                if (Math.abs(card.top - row.top) < rowTolerance) {
+                    row.cards.push(card);
+                    foundRow = true;
+                    break;
+                }
+            }
+            if (!foundRow) {
+                // Create new row
+                rows.push({
+                    top: card.top,
+                    bottom: card.bottom,
+                    cards: [card]
+                });
+            }
+        });
+        
+        // Sort rows by Y position
+        rows.sort((a, b) => a.top - b.top);
+        
+        // Find which row the mouse is in (or between rows)
+        let targetRow = null;
+        let insertAfterRow = null;
+        let isAboveFirstRow = false;
+        
+        for (let i = 0; i < rows.length; i++) {
+            const row = rows[i];
+            if (mouseY >= row.top - rowTolerance && mouseY <= row.bottom + rowTolerance) {
+                // Mouse is in this row
+                targetRow = row;
+                break;
+            } else if (mouseY < row.top) {
+                // Mouse is above this row
+                if (i === 0) {
+                    // Above the first row - insert before the first card
+                    isAboveFirstRow = true;
+                    rows[0].cards.sort((a, b) => a.left - b.left);
+                    if (rows[0].cards.length > 0) {
+                        insertBeforeTaskId = rows[0].cards[0].id;
+                    }
+                    break;
+                } else {
+                    // Above a later row - insert before this row
+                    targetRow = { top: row.top, bottom: row.top, cards: [] };
+                    insertAfterRow = i > 0 ? rows[i - 1] : null;
+                    break;
+                }
+            }
+        }
+        
+        // If mouse is below all rows
+        if (!targetRow && !isAboveFirstRow && rows.length > 0) {
+            targetRow = { top: rows[rows.length - 1].bottom, bottom: rows[rows.length - 1].bottom, cards: [] };
+            insertAfterRow = rows[rows.length - 1];
+        }
+        
+        // If no rows exist (empty bucket)
+        if (!targetRow) {
+            // insertBeforeTaskId stays null - will add to end
+        } else if (targetRow.cards.length > 0) {
+            // Row has cards - find position within row
+            // Sort cards in row by X position
+            targetRow.cards.sort((a, b) => a.left - b.left);
+            
+            // Find which card position in the row
+            for (let i = 0; i < targetRow.cards.length; i++) {
+                const card = targetRow.cards[i];
+                if (mouseX < card.centerX) {
+                    // Insert before this card
+                    insertBeforeTaskId = card.id;
+                    break;
+                } else if (i === targetRow.cards.length - 1) {
+                    // After last card in row - find next card in DOM order
+                    const allCards = Array.from(bucketTasksElement.querySelectorAll('.task-card'))
+                        .filter(card => !draggedTaskIds.includes(card.getAttribute('data-task-id')));
+                    const cardIndex = allCards.findIndex(c => c.getAttribute('data-task-id') === card.id);
+                    if (cardIndex >= 0 && cardIndex < allCards.length - 1) {
+                        insertBeforeTaskId = allCards[cardIndex + 1].getAttribute('data-task-id');
+                    }
+                }
+            }
+        } else {
+            // Empty row - insert after the last card of the previous row
+            if (insertAfterRow && insertAfterRow.cards.length > 0) {
+                // Sort cards in previous row by X position
+                insertAfterRow.cards.sort((a, b) => a.left - b.left);
+                const lastCardInRow = insertAfterRow.cards[insertAfterRow.cards.length - 1];
+                
+                // Insert after the last card in the previous row
+                const allCards = Array.from(bucketTasksElement.querySelectorAll('.task-card'))
+                    .filter(card => !draggedTaskIds.includes(card.getAttribute('data-task-id')));
+                const cardIndex = allCards.findIndex(c => c.getAttribute('data-task-id') === lastCardInRow.id);
+                if (cardIndex >= 0 && cardIndex < allCards.length - 1) {
+                    insertBeforeTaskId = allCards[cardIndex + 1].getAttribute('data-task-id');
+                }
+                // If it's the last card, insertBeforeTaskId stays null (adds to end)
+            } else if (rows.length > 0 && rows[0].cards.length > 0) {
+                // Inserting before first row - insert before first card
+                rows[0].cards.sort((a, b) => a.left - b.left);
+                insertBeforeTaskId = rows[0].cards[0].id;
+            }
+            // Otherwise insertBeforeTaskId stays null (adds to end)
         }
     }
     
     // If no insert position found, insertBeforeTaskId stays null (adds to end)
     
-    // Check if moving to different bucket or reordering within same bucket
-    if (task.bucket !== newBucket) {
-        // Moving to different bucket - change bucket first, then reorder
+    // Check if we're dropping in the same location (same bucket and same relative position)
+    const allInSameBucket = tasksToMove.every(t => t.bucket === newBucket);
+    let isSameLocation = false;
+    
+    if (allInSameBucket && originalTaskPositions.length > 0) {
+        // Get all tasks in the target bucket (excluding the ones we're moving)
+        const existingTasks = getAllTasks().filter(t => 
+            t.bucket === newBucket && 
+            !draggedTaskIds.includes(t.id) &&
+            !t.completed &&
+            !t.flagged
+        );
+        
+        // Sort existing tasks by order
+        existingTasks.sort((a, b) => {
+            const orderA = a.order || (a.createdAt ? new Date(a.createdAt).getTime() : 0);
+            const orderB = b.order || (b.createdAt ? new Date(b.createdAt).getTime() : 0);
+            return orderA - orderB;
+        });
+        
+        // Calculate where we would insert
+        let insertIndex = existingTasks.length;
+        if (insertBeforeTaskId) {
+            const targetIndex = existingTasks.findIndex(t => t.id === insertBeforeTaskId);
+            if (targetIndex >= 0) {
+                insertIndex = targetIndex;
+            }
+        }
+        
+        // Get original positions sorted
+        const originalPositionsSorted = [...originalTaskPositions].sort((a, b) => a.position - b.position);
+        const firstOriginalPosition = originalPositionsSorted[0];
+        
+        // Check if inserting at the same position as the first task's original position
+        // We need to account for the fact that when tasks are removed, positions shift
+        // So if we're inserting at the position where the first task originally was, it's the same location
+        if (firstOriginalPosition && insertIndex === firstOriginalPosition.position) {
+            // Also check that the tasks immediately before and after match
+            // (if there are tasks before/after)
+            const taskBeforeInsert = insertIndex > 0 ? existingTasks[insertIndex - 1] : null;
+            const taskAfterInsert = insertIndex < existingTasks.length ? existingTasks[insertIndex] : null;
+            
+            // Get the original task that was before the first dragged task
+            const allOriginalTasks = getAllTasks().filter(t => 
+                t.bucket === newBucket && 
+                !t.completed && 
+                !t.flagged
+            );
+            allOriginalTasks.sort((a, b) => {
+                const orderA = a.order || (a.createdAt ? new Date(a.createdAt).getTime() : 0);
+                const orderB = b.order || (b.createdAt ? new Date(b.createdAt).getTime() : 0);
+                return orderA - orderB;
+            });
+            
+            const originalTaskBefore = firstOriginalPosition.position > 0 
+                ? allOriginalTasks[firstOriginalPosition.position - 1] 
+                : null;
+            const originalTaskAfter = firstOriginalPosition.position + originalPositionsSorted.length < allOriginalTasks.length
+                ? allOriginalTasks[firstOriginalPosition.position + originalPositionsSorted.length]
+                : null;
+            
+            // Check if the tasks before and after match
+            const beforeMatches = (!taskBeforeInsert && !originalTaskBefore) || 
+                                 (taskBeforeInsert && originalTaskBefore && taskBeforeInsert.id === originalTaskBefore.id);
+            const afterMatches = (!taskAfterInsert && !originalTaskAfter) || 
+                                (taskAfterInsert && originalTaskAfter && taskAfterInsert.id === originalTaskAfter.id);
+            
+            isSameLocation = beforeMatches && afterMatches;
+        }
+    }
+    
+    // If same location, restore original order and skip reordering
+    if (isSameLocation) {
         try {
-            moveTaskToBucket(draggedTaskId, newBucket);
-            // Now reorder within the new bucket at the drop position
-            reorderTaskInBucket(draggedTaskId, insertBeforeTaskId, newBucket);
+            // Restore original orders
+            originalTaskPositions.forEach(originalPos => {
+                const task = getTaskById(originalPos.id);
+                if (task) {
+                    task.order = originalPos.order;
+                }
+            });
+            
+            // Reorder all tasks in the bucket to restore original positions
+            const allTasksInBucket = getAllTasks().filter(t => 
+                t.bucket === newBucket && 
+                !t.completed && 
+                !t.flagged
+            );
+            
+            // Sort by original order
+            allTasksInBucket.sort((a, b) => {
+                const originalA = originalTaskPositions.find(pos => pos.id === a.id);
+                const originalB = originalTaskPositions.find(pos => pos.id === b.id);
+                const orderA = originalA ? originalA.order : (a.order || (a.createdAt ? new Date(a.createdAt).getTime() : 0));
+                const orderB = originalB ? originalB.order : (b.order || (b.createdAt ? new Date(b.createdAt).getTime() : 0));
+                return orderA - orderB;
+            });
+            
+            // Reassign orders sequentially
+            allTasksInBucket.forEach((t, index) => {
+                t.order = (index + 1) * 10000;
+            });
+            
+            // Clear selection after moving
+            clearTaskSelection();
             saveAndRender();
         } catch (error) {
-            console.error('Error moving task:', error);
-            alert('Failed to move task');
+            console.error('Error restoring original positions:', error);
+            // Fall through to normal reordering
         }
     } else {
-        // Reordering within same bucket
+        // Move all selected tasks together
         try {
-            reorderTaskInBucket(draggedTaskId, insertBeforeTaskId, newBucket);
+            // Get all tasks that need to be moved to the new bucket
+            const tasksToMoveToNewBucket = tasksToMove.filter(t => t.bucket !== newBucket);
+            
+            // First, move tasks to the new bucket if needed
+            tasksToMoveToNewBucket.forEach(t => {
+                try {
+                    moveTaskToBucket(t.id, newBucket);
+                } catch (error) {
+                    console.error(`Error moving task ${t.id}:`, error);
+                }
+            });
+            
+            // Refresh task references after moving (in case bucket changed)
+            tasksToMove = draggedTaskIds.map(id => getTaskById(id)).filter(t => t !== null && t !== undefined);
+            
+            // Get all tasks in the target bucket (excluding the ones we're moving)
+            const existingTasks = getAllTasks().filter(t => 
+                t.bucket === newBucket && 
+                !draggedTaskIds.includes(t.id) &&
+                !t.completed &&
+                !t.flagged
+            );
+            
+            // Sort existing tasks by order
+            existingTasks.sort((a, b) => {
+                const orderA = a.order || (a.createdAt ? new Date(a.createdAt).getTime() : 0);
+                const orderB = b.order || (b.createdAt ? new Date(b.createdAt).getTime() : 0);
+                return orderA - orderB;
+            });
+            
+            // Sort tasks being moved to maintain their relative order
+            tasksToMove.sort((a, b) => {
+                const orderA = a.order || (a.createdAt ? new Date(a.createdAt).getTime() : 0);
+                const orderB = b.order || (b.createdAt ? new Date(b.createdAt).getTime() : 0);
+                return orderA - orderB;
+            });
+            
+            // Find insert position
+            let insertIndex = existingTasks.length;
+            if (insertBeforeTaskId) {
+                const targetIndex = existingTasks.findIndex(t => t.id === insertBeforeTaskId);
+                if (targetIndex >= 0) {
+                    insertIndex = targetIndex;
+                }
+            }
+            
+            // Build new ordered array with tasks inserted
+            const newOrderedTasks = [
+                ...existingTasks.slice(0, insertIndex),
+                ...tasksToMove,
+                ...existingTasks.slice(insertIndex)
+            ];
+            
+            // Reassign orders sequentially
+            newOrderedTasks.forEach((t, index) => {
+                t.order = (index + 1) * 10000;
+                if (tasksToMove.some(mt => mt.id === t.id)) {
+                    t.updatedAt = new Date().toISOString();
+                }
+            });
+            
+            // Clear selection after moving
+            clearTaskSelection();
             saveAndRender();
         } catch (error) {
-            console.error('Error reordering task:', error);
-            alert('Failed to reorder task: ' + error.message);
+            console.error('Error moving tasks:', error);
+            alert('Failed to move tasks');
         }
     }
     
     draggedTaskId = null;
+    draggedTaskIds = [];
     draggedElement = null;
 }
 
@@ -1186,9 +1877,229 @@ function closeTaskModal() {
     document.getElementById('taskForm').reset();
 }
 
+// Open bulk edit modal
+function openBulkEditModal() {
+    if (selectedTasks.size === 0) {
+        return;
+    }
+    
+    const modal = document.getElementById('bulkEditModal');
+    const form = document.getElementById('bulkEditForm');
+    const titleElement = document.getElementById('bulkEditModalTitle');
+    
+    if (!modal || !form) return;
+    
+    // Update title with count
+    if (titleElement) {
+        titleElement.textContent = `Bulk Edit ${selectedTasks.size} Task${selectedTasks.size > 1 ? 's' : ''}`;
+    }
+    
+    // Reset form
+    form.reset();
+    document.getElementById('bulkEditBucket').value = '';
+    document.getElementById('bulkEditDueDate').value = '';
+    document.getElementById('bulkEditTags').value = '';
+    
+    // Show modal
+    modal.classList.add('active');
+}
+
+// Close bulk edit modal
+function closeBulkEditModal() {
+    const modal = document.getElementById('bulkEditModal');
+    if (modal) {
+        modal.classList.remove('active');
+        document.getElementById('bulkEditForm').reset();
+    }
+}
+
+// Handle bulk edit form submission
+function handleBulkEditSubmit() {
+    if (selectedTasks.size === 0) {
+        closeBulkEditModal();
+        return;
+    }
+    
+    const bucketValue = document.getElementById('bulkEditBucket').value;
+    const dueDateInput = document.getElementById('bulkEditDueDate').value.trim();
+    const tagsInput = document.getElementById('bulkEditTags').value.trim();
+    
+    // Parse due date if provided
+    let parsedDate = null;
+    if (dueDateInput) {
+        parsedDate = parseNaturalDate(dueDateInput);
+        if (!parsedDate) {
+            alert('Invalid date format. Please try again.');
+            return;
+        }
+    }
+    
+    // Parse tags if provided
+    let newTags = null;
+    if (tagsInput) {
+        newTags = tagsInput.split(',').map(t => t.trim()).filter(t => t);
+    }
+    
+    // Update all selected tasks
+    const taskIds = Array.from(selectedTasks);
+    let updatedCount = 0;
+    
+    taskIds.forEach(taskId => {
+        try {
+            const task = getTaskById(taskId);
+            if (!task) return;
+            
+            const updateData = {};
+            
+            // Update bucket if specified
+            if (bucketValue) {
+                updateData.bucket = bucketValue;
+            }
+            
+            // Update due date if specified
+            if (parsedDate) {
+                updateData.dueDate = parsedDate;
+            }
+            
+            // Update tags if specified
+            if (newTags !== null) {
+                // Merge with existing tags, avoiding duplicates
+                const existingTags = task.tags || [];
+                const mergedTags = [...new Set([...existingTags, ...newTags])];
+                updateData.tags = mergedTags;
+            }
+            
+            // Only update if there's something to update
+            if (Object.keys(updateData).length > 0) {
+                updateTask(taskId, updateData);
+                updatedCount++;
+            }
+        } catch (error) {
+            console.error(`Error updating task ${taskId}:`, error);
+        }
+    });
+    
+    // Clear selection and close modal
+    clearTaskSelection();
+    closeBulkEditModal();
+    
+    // Show success message
+    if (updatedCount > 0) {
+        saveAndRender();
+    }
+}
+
+// Update total task count in header
+function updateTotalTaskCount() {
+    const totalCountElement = document.getElementById('totalTaskCount');
+    if (!totalCountElement) return;
+    
+    // Only show if signed in and main content is visible
+    const mainContent = document.getElementById('mainContent');
+    if (!mainContent || mainContent.style.display === 'none') {
+        totalCountElement.style.display = 'none';
+        return;
+    }
+    
+    const allTasks = getAllTasks();
+    const activeTasks = allTasks.filter(task => !task.completed);
+    
+    // Show count of active (non-completed) tasks, formatted like bucket counts
+    if (activeTasks.length > 0) {
+        totalCountElement.textContent = activeTasks.length;
+        totalCountElement.style.display = 'inline-block';
+    } else {
+        totalCountElement.style.display = 'none';
+    }
+}
+
+// Show all active tasks in filtered view
+function showAllActiveTasksView() {
+    const filteredBucketView = document.getElementById('filteredBucketView');
+    const bucketsContainer = document.querySelector('.buckets-container');
+    const flaggedSection = document.getElementById('flaggedSection');
+    const dayBucketsContainer = document.querySelector('.day-buckets-container');
+    const completedButtonContainer = document.querySelector('.completed-button-container');
+    const completedView = document.getElementById('completedView');
+    
+    if (filteredBucketView && bucketsContainer) {
+        bucketsContainer.style.display = 'none';
+        if (flaggedSection) flaggedSection.style.display = 'none';
+        if (dayBucketsContainer) dayBucketsContainer.style.display = 'none';
+        if (completedButtonContainer) completedButtonContainer.style.display = 'none';
+        if (completedView) completedView.style.display = 'none';
+        filteredBucketView.style.display = 'block';
+        
+        // Set a special bucket name for "all active"
+        const filteredBucket = filteredBucketView.querySelector('.filtered-bucket');
+        if (filteredBucket) {
+            filteredBucket.setAttribute('data-bucket', 'all-active');
+        }
+        
+        renderAllActiveTasksView();
+    }
+}
+
+// Render all active tasks view
+function renderAllActiveTasksView() {
+    const filteredTasksGrid = document.getElementById('filteredBucketTasksGrid');
+    const filteredCountElement = document.getElementById('count-filtered-bucket');
+    const filteredTitleElement = document.getElementById('filtered-bucket-title');
+    if (!filteredTasksGrid) return;
+    
+    // Update title
+    if (filteredTitleElement) {
+        filteredTitleElement.textContent = 'All Active Tasks';
+    }
+    
+    // Get all active (non-completed) tasks
+    const allTasks = getAllTasks();
+    const activeTasks = allTasks.filter(task => !task.completed && !task.flagged);
+    
+    // Update count
+    if (filteredCountElement) {
+        filteredCountElement.textContent = activeTasks.length;
+    }
+    
+    // Sort tasks by bucket, then by order
+    activeTasks.sort((a, b) => {
+        // First sort by bucket
+        const bucketOrder = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 
+                             'this-week', 'next-week', 'this-month', 'next-month', 
+                             'recurring', 'someday'];
+        const aBucketIndex = bucketOrder.indexOf(a.bucket);
+        const bBucketIndex = bucketOrder.indexOf(b.bucket);
+        
+        if (aBucketIndex !== bBucketIndex) {
+            return aBucketIndex - bBucketIndex;
+        }
+        
+        // Then sort by order
+        const orderA = a.order || (a.createdAt ? new Date(a.createdAt).getTime() : 0);
+        const orderB = b.order || (b.createdAt ? new Date(b.createdAt).getTime() : 0);
+        return orderA - orderB;
+    });
+    
+    if (activeTasks.length === 0) {
+        filteredTasksGrid.innerHTML = '<div class="empty-bucket">No active tasks</div>';
+    } else {
+        filteredTasksGrid.innerHTML = activeTasks.map(task => createTaskCard(task)).join('');
+        
+        // Attach event listeners
+        activeTasks.forEach(task => {
+            attachTaskEventListeners(task.id);
+        });
+        
+        // Optimize card sizing for filtered tasks (wider cards)
+        optimizeBucketCardSizing(filteredTasksGrid, activeTasks.length);
+    }
+}
+
 // Save and render
 async function saveAndRender() {
     // Move tasks from past day buckets to the next weekday before saving
+    // This is called after tasks are moved/dropped, so it will handle moving old tasks forward
+    // Newly dropped tasks are protected by the 2-second check in movePastDayTasksForward
     if (typeof movePastDayTasksForward === 'function' && typeof tasks !== 'undefined' && tasks.length > 0) {
         movePastDayTasksForward();
     }
@@ -1206,13 +2117,33 @@ async function saveAndRender() {
         localStorage.removeItem('tasks');
     }
     
-    // Check if we're in completed view
+    // Update selection visuals after render
+    updateTaskSelectionVisuals();
+    
+    // Check which view is active and render accordingly
     const completedView = document.getElementById('completedView');
+    const filteredBucketView = document.getElementById('filteredBucketView');
+    
     if (completedView && completedView.style.display !== 'none') {
         renderCompletedView();
+    } else if (filteredBucketView && filteredBucketView.style.display !== 'none') {
+        // Get the current bucket being viewed
+        const filteredBucket = filteredBucketView.querySelector('.filtered-bucket');
+        const bucketName = filteredBucket ? filteredBucket.getAttribute('data-bucket') : null;
+        if (bucketName === 'all-active') {
+            renderAllActiveTasksView();
+        } else if (bucketName) {
+            renderFilteredBucketView(bucketName);
+        }
     } else {
         renderBuckets();
     }
+    
+    // Update selection visuals again after rendering
+    updateTaskSelectionVisuals();
+    
+    // Update total task count
+    updateTotalTaskCount();
 }
 
 // Debounced sync function
@@ -1522,6 +2453,115 @@ function initializeUI() {
 
     // Modal close buttons
     document.getElementById('closeModal').addEventListener('click', closeTaskModal);
+    
+    // Bulk edit modal event listeners
+    const closeBulkEditModalBtn = document.getElementById('closeBulkEditModal');
+    const cancelBulkEditBtn = document.getElementById('cancelBulkEditBtn');
+    const bulkEditForm = document.getElementById('bulkEditForm');
+    const bulkEditModal = document.getElementById('bulkEditModal');
+    
+    if (closeBulkEditModalBtn) {
+        closeBulkEditModalBtn.addEventListener('click', closeBulkEditModal);
+    }
+    
+    if (cancelBulkEditBtn) {
+        cancelBulkEditBtn.addEventListener('click', () => {
+            closeBulkEditModal();
+        });
+    }
+    
+    if (bulkEditForm) {
+        bulkEditForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            handleBulkEditSubmit();
+        });
+    }
+    
+    if (bulkEditModal) {
+        bulkEditModal.addEventListener('click', (e) => {
+            if (e.target === bulkEditModal) {
+                closeBulkEditModal();
+            }
+        });
+    }
+    
+    // ESC key to clear selection
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            if (selectedTasks.size > 0) {
+                clearTaskSelection();
+            } else if (bulkEditModal && bulkEditModal.classList.contains('active')) {
+                closeBulkEditModal();
+            }
+        }
+    });
+    
+    // Click outside task cards to clear selection
+    // Use mousedown to track potential drag operations
+    let mouseDownTime = 0;
+    let mouseDownTarget = null;
+    
+    document.addEventListener('mousedown', (e) => {
+        mouseDownTime = Date.now();
+        mouseDownTarget = e.target;
+    });
+    
+    document.addEventListener('click', (e) => {
+        // Don't clear if we're currently dragging or just finished dragging
+        if (isDragging || hasDragged) {
+            // Reset hasDragged after a delay
+            if (hasDragged) {
+                setTimeout(() => {
+                    hasDragged = false;
+                }, 300);
+            }
+            return;
+        }
+        
+        // Don't clear if currently dragging (check for dragging class as backup)
+        if (document.querySelector('.task-card.dragging')) return;
+        
+        // If this click happened very quickly after mousedown on a draggable element,
+        // it might be part of a drag operation - skip it
+        const timeSinceMouseDown = Date.now() - mouseDownTime;
+        if (timeSinceMouseDown < 200 && mouseDownTarget) {
+            const wasDraggable = mouseDownTarget.closest('[draggable="true"]') || 
+                                 mouseDownTarget.closest('.task-card');
+            if (wasDraggable) {
+                return;
+            }
+        }
+        
+        // Only clear if there are selected tasks
+        if (selectedTasks.size === 0) return;
+        
+        // Don't clear if clicking on:
+        // - Task cards
+        // - Buttons (including bulk edit buttons)
+        // - Modals or modal content
+        // - Form inputs
+        // - Links
+        // - Bucket areas (where drops happen)
+        const target = e.target;
+        const isTaskCard = target.closest('.task-card');
+        const isButton = target.closest('button') || target.tagName === 'BUTTON';
+        const isModal = target.closest('.modal') || target.closest('.modal-content');
+        const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT';
+        const isLink = target.tagName === 'A' || target.closest('a');
+        const isBulkEditIndicator = target.closest('#bulkEditIndicator') || target.closest('.bulk-edit-indicator');
+        const isBucketHeader = target.closest('.bucket-header');
+        const isBucketCount = target.closest('.bucket-count') || target.closest('.total-task-count');
+        const isBucketTasks = target.closest('.bucket-tasks');
+        const isBucket = target.closest('.bucket');
+        
+        // If clicking on any of these, don't clear selection
+        if (isTaskCard || isButton || isModal || isInput || isLink || isBulkEditIndicator || isBucketHeader || isBucketCount || isBucketTasks || isBucket) {
+            return;
+        }
+        
+        // Click is on empty space, clear selection
+        clearTaskSelection();
+    });
 
     // Task form submission
     document.getElementById('taskForm').addEventListener('submit', (e) => {
@@ -1640,9 +2680,10 @@ function initializeUI() {
             const bucketId = bucket.getAttribute('data-bucket');
             const bucketTasks = bucket.querySelector('.bucket-tasks');
             
-            if (bucketTasks && draggedTaskId) {
-                // Preserve the taskId in case it gets cleared
-                const taskIdToMove = draggedTaskId;
+            if (bucketTasks && draggedTaskId && draggedTaskIds.length > 0) {
+                // Preserve the task IDs in case they get cleared
+                const taskIdsToMove = [...draggedTaskIds];
+                const primaryTaskId = draggedTaskId;
                 
                 // All buckets can accept drops on their headers when collapsed
                 // If collapsed, expand it first, then handle the drop
@@ -1662,17 +2703,25 @@ function initializeUI() {
                     // Create a proper event-like object with all necessary properties
                     setTimeout(() => {
                         try {
-                            // Restore draggedTaskId if it was cleared
-                            if (!draggedTaskId) {
-                                draggedTaskId = taskIdToMove;
+                            // Restore draggedTaskIds if they were cleared
+                            if (draggedTaskIds.length === 0) {
+                                draggedTaskIds = taskIdsToMove;
+                                draggedTaskId = primaryTaskId;
                             }
                             
                             // Ensure bucketTasks is still valid
                             const targetBucketTasks = bucket.querySelector('.bucket-tasks');
                             if (!targetBucketTasks) {
                                 console.error('Bucket tasks element not found after expansion');
-                                // Fallback: directly move the task
-                                moveTaskToBucket(taskIdToMove, bucketId);
+                                // Fallback: directly move all tasks
+                                taskIdsToMove.forEach(taskId => {
+                                    try {
+                                        moveTaskToBucket(taskId, bucketId);
+                                    } catch (err) {
+                                        console.error(`Error moving task ${taskId}:`, err);
+                                    }
+                                });
+                                clearTaskSelection();
                                 saveAndRender();
                                 return;
                             }
@@ -1687,12 +2736,19 @@ function initializeUI() {
                             handleDrop(dropEvent);
                         } catch (error) {
                             console.error('Error handling drop on collapsed bucket header:', error);
-                            // Fallback: directly move the task to the bucket
+                            // Fallback: directly move all tasks to the bucket
                             try {
-                                moveTaskToBucket(taskIdToMove, bucketId);
+                                taskIdsToMove.forEach(taskId => {
+                                    try {
+                                        moveTaskToBucket(taskId, bucketId);
+                                    } catch (err) {
+                                        console.error(`Error moving task ${taskId}:`, err);
+                                    }
+                                });
+                                clearTaskSelection();
                                 saveAndRender();
                             } catch (moveError) {
-                                console.error('Error moving task to bucket:', moveError);
+                                console.error('Error moving tasks to bucket:', moveError);
                             }
                         }
                     }, 150); // Increased timeout to ensure bucket is fully expanded and rendered
@@ -1709,12 +2765,19 @@ function initializeUI() {
                         handleDrop(dropEvent);
                     } catch (error) {
                         console.error('Error handling drop on expanded bucket header:', error);
-                        // Fallback: directly move the task to the bucket
+                        // Fallback: directly move all tasks to the bucket
                         try {
-                            moveTaskToBucket(taskIdToMove, bucketId);
+                            taskIdsToMove.forEach(taskId => {
+                                try {
+                                    moveTaskToBucket(taskId, bucketId);
+                                } catch (err) {
+                                    console.error(`Error moving task ${taskId}:`, err);
+                                }
+                            });
+                            clearTaskSelection();
                             saveAndRender();
                         } catch (moveError) {
-                            console.error('Error moving task to bucket:', moveError);
+                            console.error('Error moving tasks to bucket:', moveError);
                         }
                     }
                 }
@@ -1722,9 +2785,14 @@ function initializeUI() {
         });
     });
     
-    // Set up drag and drop for bucket tasks
-    document.querySelectorAll('.bucket-tasks').forEach(el => {
-        el.addEventListener('dragover', (e) => {
+    // Set up drag and drop for bucket tasks using event delegation
+    // This ensures listeners work even after DOM is re-rendered
+    document.addEventListener('dragover', (e) => {
+        const el = e.target.closest('.bucket-tasks');
+        if (!el) return;
+        
+        // Only handle if this is a bucket-tasks element
+        if (el.classList.contains('bucket-tasks')) {
             e.preventDefault();
             e.stopPropagation();
             el.classList.add('drag-over');
@@ -1735,190 +2803,321 @@ function initializeUI() {
             const mouseX = e.clientX;
             const mouseY = e.clientY;
             const taskCards = Array.from(el.querySelectorAll('.task-card'))
-                .filter(card => card.getAttribute('data-task-id') !== draggedTaskId);
+                .filter(card => !draggedTaskIds.includes(card.getAttribute('data-task-id')));
             
             // Remove all drag-over-task classes and drop indicators first
             document.querySelectorAll('.task-card').forEach(card => {
                 card.classList.remove('drag-over-task', 'drag-over-before', 'drag-over-after', 'drag-over-left', 'drag-over-right');
             });
             
-            // Remove any existing drop indicator
+            // Remove any existing drop indicators and previews
             const existingIndicator = el.querySelector('.drop-indicator');
             if (existingIndicator) {
                 existingIndicator.remove();
             }
+            const existingPreview = el.querySelector('.drop-preview');
+            if (existingPreview) {
+                existingPreview.remove();
+            }
             
-            // Find the closest task card
-            let closestCard = null;
-            let closestDistance = Infinity;
-            let insertPosition = 'before'; // 'before', 'after', 'left', 'right'
+            // Calculate where the card will actually be placed (matching the drop logic)
+            const containerRect = el.getBoundingClientRect();
+            let previewTop, previewLeft, previewWidth, previewHeight;
             
-            for (let i = 0; i < taskCards.length; i++) {
-                const card = taskCards[i];
-                const cardRect = card.getBoundingClientRect();
-                const cardCenterX = cardRect.left + (cardRect.width / 2);
-                const cardCenterY = cardRect.top + (cardRect.height / 2);
+            // Get actual card dimensions from an existing card if available, otherwise use defaults
+            // Preview should be slightly smaller (85% scale) to indicate it's a preview, not the actual card
+            let previewCardWidth = 170;
+            let previewCardHeight = 102;
+            if (taskCards.length > 0) {
+                const sampleCard = taskCards[0];
+                const sampleRect = sampleCard.getBoundingClientRect();
+                previewCardWidth = sampleRect.width * 0.85;
+                previewCardHeight = sampleRect.height * 0.85;
+            }
+            
+            // Get all cards with their positions (matching drop logic)
+            const cardsWithPositions = taskCards.map(card => {
+                const rect = card.getBoundingClientRect();
+                return {
+                    card: card,
+                    id: card.getAttribute('data-task-id'),
+                    rect: rect,
+                    centerX: rect.left + (rect.width / 2),
+                    centerY: rect.top + (rect.height / 2),
+                    top: rect.top,
+                    bottom: rect.bottom,
+                    left: rect.left,
+                    right: rect.right
+                };
+            });
+            
+            // Check if mouse is directly over a card
+            let cardUnderMouse = cardsWithPositions.find(c => 
+                mouseX >= c.left && mouseX <= c.right &&
+                mouseY >= c.top && mouseY <= c.bottom
+            );
+            
+            if (cardUnderMouse) {
+                // Dropping directly on a card - show preview next to it
+                if (mouseX < cardUnderMouse.centerX) {
+                    // Left side - preview to the left
+                    previewLeft = Math.max(0, cardUnderMouse.left - containerRect.left - previewCardWidth - 8);
+                    previewTop = cardUnderMouse.top - containerRect.top;
+                } else {
+                    // Right side - preview to the right
+                    previewLeft = Math.min(
+                        containerRect.width - previewCardWidth,
+                        cardUnderMouse.right - containerRect.left + 8
+                    );
+                    previewTop = cardUnderMouse.top - containerRect.top;
+                }
+                previewWidth = previewCardWidth + 'px';
+                previewHeight = previewCardHeight + 'px';
+            } else if (cardsWithPositions.length > 0) {
+                // Check if we're above the first card (for column layouts)
+                const firstCard = cardsWithPositions.reduce((first, card) => {
+                    if (!first) return card;
+                    // Find the topmost card, and if tied, the leftmost
+                    if (card.top < first.top || (card.top === first.top && card.left < first.left)) {
+                        return card;
+                    }
+                    return first;
+                }, null);
                 
-                // Calculate distance
-                const distanceX = mouseX - cardCenterX;
-                const distanceY = mouseY - cardCenterY;
-                const distance = Math.sqrt(distanceX * distanceX + distanceY * distanceY);
+                if (firstCard && mouseY < firstCard.top - 20) {
+                    // Above the first card - show preview above it
+                    previewLeft = firstCard.left - containerRect.left;
+                    previewTop = Math.max(0, firstCard.top - containerRect.top - previewCardHeight - 8);
+                    previewWidth = previewCardWidth + 'px';
+                    previewHeight = previewCardHeight + 'px';
+                } else {
+                    // Dropping in empty space - find which row we're in (matching drop logic)
+                const rowTolerance = 50;
+                const rows = [];
                 
-                if (distance < closestDistance) {
-                    closestDistance = distance;
-                    closestCard = card;
-                    
-                    // Determine insert position based on mouse position relative to card
-                    // Check if mouse is within the card's vertical bounds (same row)
-                    const isInSameRow = mouseY >= cardRect.top && mouseY <= cardRect.bottom;
-                    // Check if mouse is within the card's horizontal bounds (same column)
-                    const isInSameColumn = mouseX >= cardRect.left && mouseX <= cardRect.right;
-                    
-                    // If mouse is in the same row (or very close), prioritize horizontal positioning
-                    if (isInSameRow || Math.abs(distanceY) < cardRect.height * 0.3) {
-                        // Horizontal positioning - left or right
-                        if (mouseX < cardCenterX) {
-                            insertPosition = 'left';
-                        } else {
-                            insertPosition = 'right';
+                cardsWithPositions.forEach(card => {
+                    let foundRow = false;
+                    for (let row of rows) {
+                        if (Math.abs(card.top - row.top) < rowTolerance) {
+                            row.cards.push(card);
+                            foundRow = true;
+                            break;
                         }
-                    } else if (isInSameColumn || Math.abs(distanceX) < cardRect.width * 0.3) {
-                        // Vertical positioning - top or bottom
-                        if (mouseY < cardCenterY) {
-                            insertPosition = 'before';
+                    }
+                    if (!foundRow) {
+                        rows.push({
+                            top: card.top,
+                            bottom: card.bottom,
+                            cards: [card]
+                        });
+                    }
+                });
+                
+                rows.sort((a, b) => a.top - b.top);
+                
+                // Find which row the mouse is in
+                let targetRow = null;
+                let isAboveFirstRow = false;
+                for (let i = 0; i < rows.length; i++) {
+                    const row = rows[i];
+                    if (mouseY >= row.top - rowTolerance && mouseY <= row.bottom + rowTolerance) {
+                        targetRow = row;
+                        break;
+                    } else if (mouseY < row.top) {
+                        // Above this row - check if it's the first row
+                        if (i === 0) {
+                            // Above the first row - show preview above the first card
+                            isAboveFirstRow = true;
+                            rows[0].cards.sort((a, b) => a.left - b.left);
+                            const firstCard = rows[0].cards[0];
+                            previewLeft = firstCard.left - containerRect.left;
+                            previewTop = Math.max(0, firstCard.top - containerRect.top - previewCardHeight - 8);
+                            break;
                         } else {
-                            insertPosition = 'after';
-                        }
-                    } else {
-                        // Determine based on which axis has the smaller distance
-                        if (Math.abs(distanceX) < Math.abs(distanceY)) {
-                            // Closer horizontally - use left/right
-                            if (mouseX < cardCenterX) {
-                                insertPosition = 'left';
-                            } else {
-                                insertPosition = 'right';
-                            }
-                        } else {
-                            // Closer vertically - use top/bottom
-                            if (mouseY < cardCenterY) {
-                                insertPosition = 'before';
-                            } else {
-                                insertPosition = 'after';
-                            }
+                            // Above a later row - show preview at start of this row
+                            targetRow = { top: row.top, bottom: row.top, cards: [] };
+                            break;
                         }
                     }
                 }
-            }
-            
-            // Show visual indicator
-            if (closestCard) {
-                const cardRect = closestCard.getBoundingClientRect();
-                const containerRect = el.getBoundingClientRect();
                 
-                // Remove all position classes first
-                closestCard.classList.remove('drag-over-before', 'drag-over-after', 'drag-over-left', 'drag-over-right');
-                
-                // Add appropriate class
-                if (insertPosition === 'before') {
-                    closestCard.classList.add('drag-over-before');
-                } else if (insertPosition === 'after') {
-                    closestCard.classList.add('drag-over-after');
-                } else if (insertPosition === 'left') {
-                    closestCard.classList.add('drag-over-left');
-                } else if (insertPosition === 'right') {
-                    closestCard.classList.add('drag-over-right');
-                }
-                
-                // Add drop indicator line
-                const indicator = document.createElement('div');
-                indicator.className = 'drop-indicator';
-                
-                if (insertPosition === 'left' || insertPosition === 'right') {
-                    // Horizontal indicator (vertical line on left or right)
-                    if (insertPosition === 'left') {
-                        indicator.style.left = (cardRect.left - containerRect.left - 2) + 'px';
-                        indicator.style.top = (cardRect.top - containerRect.top) + 'px';
-                        indicator.style.width = '3px';
-                        indicator.style.height = cardRect.height + 'px';
-                    } else {
-                        indicator.style.left = (cardRect.right - containerRect.left + 2) + 'px';
-                        indicator.style.top = (cardRect.top - containerRect.top) + 'px';
-                        indicator.style.width = '3px';
-                        indicator.style.height = cardRect.height + 'px';
+                // If mouse is below all rows
+                if (!targetRow && !isAboveFirstRow && rows.length > 0) {
+                    const lastRow = rows[rows.length - 1];
+                    lastRow.cards.sort((a, b) => a.left - b.left);
+                    const lastCard = lastRow.cards[lastRow.cards.length - 1];
+                    previewLeft = lastCard.right - containerRect.left + 8;
+                    previewTop = lastCard.top - containerRect.top;
+                } else if (!isAboveFirstRow && targetRow && targetRow.cards.length > 0) {
+                    // Row has cards - find position within row
+                    targetRow.cards.sort((a, b) => a.left - b.left);
+                    
+                    // Find which card position in the row
+                    let foundPosition = false;
+                    for (let i = 0; i < targetRow.cards.length; i++) {
+                        const card = targetRow.cards[i];
+                        if (mouseX < card.centerX) {
+                            // Insert before this card
+                            previewLeft = Math.max(0, card.left - containerRect.left - previewCardWidth - 8);
+                            previewTop = card.top - containerRect.top;
+                            foundPosition = true;
+                            break;
+                        } else if (i === targetRow.cards.length - 1) {
+                            // After last card in row
+                            previewLeft = Math.min(
+                                containerRect.width - previewCardWidth,
+                                card.right - containerRect.left + 8
+                            );
+                            previewTop = card.top - containerRect.top;
+                            foundPosition = true;
+                        }
+                    }
+                    if (!foundPosition) {
+                        // Default to after last card
+                        const lastCard = targetRow.cards[targetRow.cards.length - 1];
+                        previewLeft = Math.min(
+                            containerRect.width - previewCardWidth,
+                            lastCard.right - containerRect.left + 8
+                        );
+                        previewTop = lastCard.top - containerRect.top;
                     }
                 } else {
-                    // Vertical indicator (horizontal line on top or bottom)
-                    if (insertPosition === 'before') {
-                        indicator.style.top = (cardRect.top - containerRect.top - 2) + 'px';
+                    // Empty row - show at start of row
+                    if (rows.length > 0 && rows[0].cards.length > 0) {
+                        rows[0].cards.sort((a, b) => a.left - b.left);
+                        const firstCard = rows[0].cards[0];
+                        previewLeft = Math.max(0, firstCard.left - containerRect.left - previewCardWidth - 8);
+                        previewTop = firstCard.top - containerRect.top;
                     } else {
-                        indicator.style.top = (cardRect.bottom - containerRect.top + 2) + 'px';
+                        // No cards at all - show at top left
+                        previewLeft = '0px';
+                        previewTop = '8px';
                     }
-                    indicator.style.left = (cardRect.left - containerRect.left) + 'px';
-                    indicator.style.width = cardRect.width + 'px';
-                    indicator.style.height = '3px';
                 }
                 
-                el.appendChild(indicator);
-            } else if (taskCards.length === 0) {
-                // Empty bucket - show indicator at top
-                const indicator = document.createElement('div');
-                indicator.className = 'drop-indicator';
-                indicator.style.top = '0px';
-                indicator.style.left = '0px';
-                indicator.style.width = '100%';
-                indicator.style.height = '3px';
-                el.appendChild(indicator);
-            }
-        });
-        
-        el.addEventListener('dragleave', (e) => {
-            // Only remove if leaving the bucket area, not just moving between children
-            if (!el.contains(e.relatedTarget)) {
-                el.classList.remove('drag-over');
-                document.querySelectorAll('.task-card').forEach(card => {
-                    card.classList.remove('drag-over-task', 'drag-over-before', 'drag-over-after', 'drag-over-left', 'drag-over-right');
-                });
-                const indicator = el.querySelector('.drop-indicator');
-                if (indicator) indicator.remove();
-            }
-        });
-        
-        el.addEventListener('drop', handleDrop);
-        
-        // Click on empty space in bucket to add task with that bucket pre-selected
-        el.addEventListener('click', (e) => {
-            // Don't trigger if clicking on a task card or if we just dragged
-            if (hasDragged) return;
-            if (e.target.closest('.task-card')) return;
-            
-            // Get the bucket this container belongs to
-            const bucket = el.closest('.bucket');
-            if (!bucket) return;
-            
-            const bucketId = bucket.getAttribute('data-bucket');
-            if (!bucketId) return;
-            
-            // Pre-select this bucket before opening modal
-            const bucketSelect = document.getElementById('taskBucket');
-            if (bucketSelect) {
-                bucketSelect.value = bucketId;
-            }
-            
-            // If recurring bucket, check the recurring checkbox
-            if (bucketId === 'recurring') {
-                const recurringCheckbox = document.getElementById('taskRecurring');
-                if (recurringCheckbox) {
-                    recurringCheckbox.checked = true;
-                    // Mark to preserve recurring checkbox in openTaskModal
-                    recurringCheckbox.setAttribute('data-preserve-recurring', 'true');
-                    // Trigger change event to show recurring options
-                    recurringCheckbox.dispatchEvent(new Event('change'));
+                previewWidth = previewCardWidth + 'px';
+                previewHeight = previewCardHeight + 'px';
                 }
+            } else {
+                // No cards - show at top
+                previewLeft = '0px';
+                previewTop = '8px';
+                previewWidth = previewCardWidth + 'px';
+                previewHeight = previewCardHeight + 'px';
             }
             
-            openTaskModal();
-        });
+            // Add preview placeholder showing where task(s) will appear (only visual indicator)
+            const preview = document.createElement('div');
+            preview.className = 'drop-preview';
+            preview.style.position = 'absolute';
+            preview.style.top = (typeof previewTop === 'number' ? previewTop + 'px' : previewTop);
+            preview.style.left = (typeof previewLeft === 'number' ? previewLeft + 'px' : previewLeft);
+            preview.style.width = previewWidth;
+            preview.style.height = previewHeight;
+            preview.style.zIndex = '999';
+            
+            // Add count badge if multiple tasks
+            if (draggedTaskIds.length > 1) {
+                const countBadge = document.createElement('div');
+                countBadge.className = 'drop-preview-count';
+                countBadge.textContent = draggedTaskIds.length;
+                preview.appendChild(countBadge);
+            }
+            
+            el.appendChild(preview);
+        }
+    });
+    
+    document.addEventListener('dragleave', (e) => {
+        const el = e.target.closest('.bucket-tasks');
+        if (!el || !el.classList.contains('bucket-tasks')) return;
         
+        // Only remove if leaving the bucket area, not just moving between children
+        if (!el.contains(e.relatedTarget)) {
+            el.classList.remove('drag-over');
+            document.querySelectorAll('.task-card').forEach(card => {
+                card.classList.remove('drag-over-task', 'drag-over-before', 'drag-over-after', 'drag-over-left', 'drag-over-right');
+            });
+            const indicator = el.querySelector('.drop-indicator');
+            if (indicator) indicator.remove();
+            const preview = el.querySelector('.drop-preview');
+            if (preview) preview.remove();
+        }
+    });
+    
+    document.addEventListener('drop', (e) => {
+        // Check if dropping on bucket-tasks
+        const el = e.target.closest('.bucket-tasks');
+        if (el && el.classList.contains('bucket-tasks')) {
+            e.preventDefault();
+            e.stopPropagation();
+            // Create a synthetic event object with all necessary properties
+            const dropEvent = {
+                preventDefault: () => e.preventDefault(),
+                stopPropagation: () => e.stopPropagation(),
+                currentTarget: el,
+                target: e.target,
+                clientX: e.clientX,
+                clientY: e.clientY,
+                dataTransfer: e.dataTransfer
+            };
+            handleDrop(dropEvent);
+            return;
+        }
+        
+        // Also check flagged tasks container
+        const flaggedContainer = document.getElementById('flaggedTasks');
+        if (flaggedContainer && (e.target === flaggedContainer || flaggedContainer.contains(e.target))) {
+            e.preventDefault();
+            e.stopPropagation();
+            const dropEvent = {
+                preventDefault: () => e.preventDefault(),
+                stopPropagation: () => e.stopPropagation(),
+                currentTarget: flaggedContainer,
+                target: e.target,
+                clientX: e.clientX,
+                clientY: e.clientY,
+                dataTransfer: e.dataTransfer
+            };
+            handleDrop(dropEvent);
+        }
+    });
+    
+    // Click on empty space in bucket to add task with that bucket pre-selected
+    document.addEventListener('click', (e) => {
+        const el = e.target.closest('.bucket-tasks');
+        if (!el || !el.classList.contains('bucket-tasks')) return;
+        
+        // Don't trigger if clicking on a task card or if we just dragged
+        if (hasDragged) return;
+        if (e.target.closest('.task-card')) return;
+        
+        // Get the bucket this container belongs to
+        const bucket = el.closest('.bucket');
+        if (!bucket) return;
+        
+        const bucketId = bucket.getAttribute('data-bucket');
+        if (!bucketId) return;
+        
+        // Pre-select this bucket before opening modal
+        const bucketSelect = document.getElementById('taskBucket');
+        if (bucketSelect) {
+            bucketSelect.value = bucketId;
+        }
+        
+        // If recurring bucket, check the recurring checkbox
+        if (bucketId === 'recurring') {
+            const recurringCheckbox = document.getElementById('taskRecurring');
+            if (recurringCheckbox) {
+                recurringCheckbox.checked = true;
+                // Mark to preserve recurring checkbox in openTaskModal
+                recurringCheckbox.setAttribute('data-preserve-recurring', 'true');
+                // Trigger change event to show recurring options
+                recurringCheckbox.dispatchEvent(new Event('change'));
+            }
+        }
+        
+        openTaskModal();
     });
     
     // Set up drag and drop for flagged tasks section
@@ -2110,6 +3309,43 @@ function initializeUI() {
         });
     }
     
+    // Back button from filtered view
+    const backToMainFromFilteredBtn = document.getElementById('backToMainFromFilteredBtn');
+    if (backToMainFromFilteredBtn) {
+        backToMainFromFilteredBtn.addEventListener('click', () => {
+            showMainView();
+        });
+    }
+    
+    // Add click handlers to all bucket counts
+    const allBuckets = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 
+                        'this-week', 'next-week', 'this-month', 'next-month', 
+                        'recurring', 'someday', 'completed'];
+    
+    allBuckets.forEach(bucketName => {
+        const countElement = document.getElementById(`count-${bucketName}`);
+        if (countElement) {
+            // Make it look clickable
+            countElement.style.cursor = 'pointer';
+            countElement.title = 'Click to view all tasks in this bucket';
+            
+            countElement.addEventListener('click', (e) => {
+                e.stopPropagation(); // Prevent triggering bucket header click
+                showFilteredBucketView(bucketName);
+            });
+        }
+    });
+    
+    // Add click handler to total task count
+    const totalTaskCount = document.getElementById('totalTaskCount');
+    if (totalTaskCount) {
+        totalTaskCount.title = 'Click to view all active tasks';
+        totalTaskCount.addEventListener('click', (e) => {
+            e.stopPropagation();
+            showAllActiveTasksView();
+        });
+    }
+    
     // Initialize Pomodoro timer
     initializePomodoro();
     
@@ -2225,10 +3461,16 @@ function showMainContent() {
         const headerControls = header.querySelector('.header-controls');
         if (headerControls) headerControls.style.display = 'flex';
     }
+    
+    // Update total task count when showing main content
+    if (typeof updateTotalTaskCount === 'function') {
+        updateTotalTaskCount();
+    }
 }
 
 function showMainView() {
     const completedView = document.getElementById('completedView');
+    const filteredBucketView = document.getElementById('filteredBucketView');
     const bucketsContainer = document.querySelector('.buckets-container');
     const flaggedSection = document.getElementById('flaggedSection');
     const dayBucketsContainer = document.querySelector('.day-buckets-container');
@@ -2236,11 +3478,13 @@ function showMainView() {
     
     if (completedView && bucketsContainer) {
         completedView.style.display = 'none';
+        if (filteredBucketView) filteredBucketView.style.display = 'none';
         bucketsContainer.style.display = 'grid';
         if (flaggedSection) flaggedSection.style.display = 'flex';
         if (dayBucketsContainer) dayBucketsContainer.style.display = 'grid';
         if (completedButtonContainer) completedButtonContainer.style.display = 'flex';
         renderBuckets();
+        updateTotalTaskCount();
     }
 }
 
@@ -2300,6 +3544,112 @@ function renderCompletedView() {
         
         // Optimize card sizing for completed tasks
         optimizeBucketCardSizing(completedTasksGrid, completedTasks.length);
+    }
+}
+
+// Show filtered bucket view
+function showFilteredBucketView(bucketName) {
+    const filteredBucketView = document.getElementById('filteredBucketView');
+    const bucketsContainer = document.querySelector('.buckets-container');
+    const flaggedSection = document.getElementById('flaggedSection');
+    const dayBucketsContainer = document.querySelector('.day-buckets-container');
+    const completedButtonContainer = document.querySelector('.completed-button-container');
+    const completedView = document.getElementById('completedView');
+    
+    if (filteredBucketView && bucketsContainer) {
+        bucketsContainer.style.display = 'none';
+        if (flaggedSection) flaggedSection.style.display = 'none';
+        if (dayBucketsContainer) dayBucketsContainer.style.display = 'none';
+        if (completedButtonContainer) completedButtonContainer.style.display = 'none';
+        if (completedView) completedView.style.display = 'none';
+        filteredBucketView.style.display = 'block';
+        
+        // Set the data-bucket attribute so we can refresh it later
+        const filteredBucket = filteredBucketView.querySelector('.filtered-bucket');
+        if (filteredBucket) {
+            filteredBucket.setAttribute('data-bucket', bucketName);
+        }
+        
+        renderFilteredBucketView(bucketName);
+    }
+}
+
+// Render filtered bucket view
+function renderFilteredBucketView(bucketName) {
+    const filteredTasksGrid = document.getElementById('filteredBucketTasksGrid');
+    const filteredCountElement = document.getElementById('count-filtered-bucket');
+    const filteredTitleElement = document.getElementById('filtered-bucket-title');
+    if (!filteredTasksGrid) return;
+    
+    // Get bucket name for display
+    const bucketDisplayNames = {
+        'monday': 'Monday',
+        'tuesday': 'Tuesday',
+        'wednesday': 'Wednesday',
+        'thursday': 'Thursday',
+        'friday': 'Friday',
+        'this-week': '📅 This Week',
+        'next-week': '📆 Next Week',
+        'this-month': '🗓️ This Month',
+        'next-month': '📋 Next Month',
+        'recurring': '🔄 Recurring',
+        'someday': '⭐ Someday',
+        'completed': '✅ Completed'
+    };
+    
+    const displayName = bucketDisplayNames[bucketName] || bucketName;
+    
+    // Update title
+    if (filteredTitleElement) {
+        filteredTitleElement.textContent = displayName;
+    }
+    
+    // Get tasks for this bucket
+    let bucketTasks = [];
+    if (bucketName === 'completed') {
+        bucketTasks = getAllTasks().filter(task => task.completed === true);
+    } else {
+        bucketTasks = getAllTasks().filter(task => 
+            task.bucket === bucketName && 
+            !task.completed && 
+            !task.flagged
+        );
+    }
+    
+    // Update count
+    if (filteredCountElement) {
+        filteredCountElement.textContent = bucketTasks.length;
+    }
+    
+    // Sort tasks
+    if (bucketName === 'completed') {
+        // Sort by completed date (most recent first)
+        bucketTasks.sort((a, b) => {
+            const dateA = a.completedAt ? new Date(a.completedAt).getTime() : 0;
+            const dateB = b.completedAt ? new Date(b.completedAt).getTime() : 0;
+            return dateB - dateA;
+        });
+    } else {
+        // Sort by order or creation date
+        bucketTasks.sort((a, b) => {
+            const orderA = a.order || (a.createdAt ? new Date(a.createdAt).getTime() : 0);
+            const orderB = b.order || (b.createdAt ? new Date(b.createdAt).getTime() : 0);
+            return orderA - orderB;
+        });
+    }
+    
+    if (bucketTasks.length === 0) {
+        filteredTasksGrid.innerHTML = '<div class="empty-bucket">No tasks in this bucket</div>';
+    } else {
+        filteredTasksGrid.innerHTML = bucketTasks.map(task => createTaskCard(task)).join('');
+        
+        // Attach event listeners
+        bucketTasks.forEach(task => {
+            attachTaskEventListeners(task.id);
+        });
+        
+        // Optimize card sizing for filtered tasks (wider cards)
+        optimizeBucketCardSizing(filteredTasksGrid, bucketTasks.length);
     }
 }
 
